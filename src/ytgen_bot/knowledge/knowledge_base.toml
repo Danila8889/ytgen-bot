@@ -1,0 +1,158 @@
+# Static knowledge base for the funnel and the AI layer.
+#
+# RULES (enforced by tests/test_knowledge_base.py):
+#   * NO tariff money and NO tariff limits here: prices, periods, per-day / per-window counts and tariff names come ONLY from
+#     the wrapper's public tariff list, rendered live (funnel/tariffs.py). A price or limit in this file fails the suite.
+#   * Only NON-tariff product facts that no API exposes live here (dubbing languages, competitor-analysis link count, music,
+#     processes, policies). They CAN GO STALE: each one is listed in documentation.md "Facts that can go stale" and carries
+#     its source below.
+#   * `source` is where the fact came from. "PDF §11" = the third-party funnel spec of 2026-10-22 (its own source column
+#     says site / FAQ / offer / README / channel posts); those facts were copied, NOT independently verified in this repo.
+#
+# `{SUPPORT_CONTACT}` is replaced with the SUPPORT_CONTACT env var when the text is rendered.
+# The script (not the AI) may also show a fact verbatim: `kb.fact("<id>")`.
+
+[[fact]]
+id = "process"
+text = "Процесс устроен в четыре шага. Канал настраивается в конструкторе: ниша, стиль, голос, технических знаний не нужно. Сценарий пишется поэтапно: тема, план, затем главы. Озвучка и видеоряд собираются автоматически, сцена за сценой. Сцены и озвучка собираются в готовый ролик."
+source = "сайт ytgenerator.ru (PDF §3 M1.2, §11)"
+
+[[fact]]
+id = "visuals"
+text = "Видеоряд можно делать на ИИ-клипах (Veo 3.1, Gemini Omni Flash), на ИИ-картинках (Nano Banana Pro) или на стоковых видео и фото; режимы можно смешивать. Если ИИ-картинка не нужна, видеоряд можно собрать на стоках."
+source = "сайт; смешивание режимов - пост канала (PDF §11)"
+
+[[fact]]
+id = "scripts"
+text = "Сценарий пишет Claude 5, поэтапно, под стиль и характер канала."
+source = "сайт (PDF §11)"
+
+[[fact]]
+id = "voice"
+text = "Озвучка на ElevenLabs. Голос можно выбрать из библиотеки с предварительным прослушиванием или клонировать свой."
+source = "сайт; клон и прослушивание - пост канала 05.10.2026 и README (PDF §11)"
+
+[[fact]]
+id = "regenerate"
+text = "Любую сцену можно перегенерировать вручную в сервисе, по промту."
+source = "сайт (PDF §11); формулировка сужена до подтверждённого, без автоматической проверки кадров"
+
+[[fact]]
+id = "script_file"
+text = "К каждому видео прилагается файл со сценарием: таймкоды сцен, текст озвучки, промты, варианты названий, хэштеги."
+source = "сайт (PDF §11)"
+
+[[fact]]
+id = "dubbing"
+text = "Дубляж: до 4 дополнительных языков на видео из 12 (английский, русский, испанский, португальский, немецкий, французский, итальянский, украинский, турецкий, польский, японский, корейский). Видео рендерится один раз, на каждый язык выдаются MP3, SRT и TXT. Меняется только звук, текст на экране остаётся на языке оригинала. Есть суточный лимит. Дубляж входит в любой тариф."
+source = "сайт (PDF §11)"
+
+[[fact]]
+id = "dubbing_goal_clause"
+text = "до 4 дополнительных языков дубляжа на каждое видео входят в тариф"
+source = "сайт (PDF §5 M3.1, фраза про цель n1_lang)"
+
+[[fact]]
+id = "music"
+text = "Фоновая музыка: генерируются инструментальные треки (без слов), на канал до 5 треков; есть лимит генераций."
+source = "README веб-приложения, README ядра (PDF §11)"
+
+[[fact]]
+id = "competitor_analysis"
+text = "Анализ конкурентов: можно вставить 1-5 ссылок на публичные видео YouTube; на выходе черновик системного промпта канала («Библия канала») и предложенная структура сценария. Результат правится вручную."
+source = "README веб-приложения, README ядра (PDF §11)"
+
+[[fact]]
+id = "channels"
+text = "Несколько каналов доступны на любом тарифе."
+source = "FAQ сайта (PDF §11, решение владельца 2026-10-22: только эта формулировка, без чисел)"
+
+[[fact]]
+id = "cloud"
+text = "Сервис работает в облаке: ничего устанавливать не нужно, генерация идёт на стороне сервиса, компьютер можно выключить."
+source = "README веб-приложения, README ядра (PDF §11)"
+
+[[fact]]
+id = "all_features"
+text = "Все функции доступны на любом тарифе, отличаются только лимиты."
+source = "сайт; пост канала 20.08.2026 (PDF §11)"
+
+[[fact]]
+id = "support_group"
+text = "Поддержка и закрытая Telegram-группа с обучением входят в каждый тариф. В группе: поиск ниш с помощью автоматизации, запуск канала по шагам, как работает YouTube, масштабирование. Доступ в группу уточняется у менеджера: {SUPPORT_CONTACT}."
+source = "сайт; посты канала (PDF §11); порядок доступа - решение владельца 2026-10-22 (не называть, кто добавляет)"
+
+[[fact]]
+id = "no_autorenewal"
+text = "Автопродления нет: продлевать или нет, решает сам клиент. Продление - повторной оплатой."
+source = "сайт, FAQ (PDF §11); политика, остаётся в базе"
+
+[[fact]]
+id = "entry_no_carryover"
+text = "Неиспользованный остаток не переносится. Продление повторной оплатой."
+source = "сайт, FAQ (PDF §11); относится к короткому тарифу"
+
+[[fact]]
+id = "limits_are_ceilings"
+text = "Лимиты тарифов - это потолки, а не обещание, сколько видео получится у человека или сколько он заработает."
+source = "сайт (PDF §5, §11)"
+
+[[fact]]
+id = "not_publishing"
+text = "Сервис не публикует видео на YouTube: он отдаёт готовое видео и файл со сценарием."
+source = "сайт и код (PDF §1, §11)"
+
+[[fact]]
+id = "no_guarantees"
+text = "Просмотры, рост, монетизацию и отсутствие ограничений со стороны YouTube не гарантирует никто: решение принимает YouTube, а его правила меняются. За соответствие контента правилам YouTube отвечает автор."
+source = "FAQ сайта; оферта п. 6 (PDF §1, §11)"
+
+[[fact]]
+id = "not_templated"
+text = "Сервис не собирает видео по одному шаблону: сценарий пишется поэтапно, структуру сюжета и настройки задаёт сам автор, ИИ можно смешивать со стоками, а канал можно создать по анализу видео конкурентов."
+source = "сайт (PDF §7 q_template; без упоминания вспомогательных сцен)"
+
+[[fact]]
+id = "no_trial"
+text = "Пробного периода и бесплатного тарифа нет."
+source = "сайт и оферта не содержат пробного периода (PDF §11)"
+
+[[fact]]
+id = "motion_graphics"
+text = "Моушн-графика (кинетические субтитры, инфографика, выноски) в разработке: доступной её не называть."
+source = "подтверждено владельцем 2026-10-22 (PDF §11)"
+
+[[fact]]
+id = "payment"
+text = "Оплата в боте проходит через платёжную страницу ЮKassa: доступные способы оплаты показаны на ней, электронный чек приходит на email. Промокод вводится в боте при оформлении оплаты. Другие способы оплаты обсуждает менеджер."
+source = "оферта п. 3 (PDF §11); порядок оплаты - решение владельца 2026-10-22 (оплата в боте)"
+
+[[fact]]
+id = "refund"
+text = "Отказ от договора и возврат - по оферте, раздел 4 (https://ytgenerator.ru/legal/oferta). Возврат идёт за вычетом фактически понесённых расходов. Сумму возврата называть нельзя."
+source = "оферта, раздел 4 (PDF §11)"
+
+[[fact]]
+id = "contacts"
+text = "Менеджер и поддержка: {SUPPORT_CONTACT}. Сайт: ytgenerator.ru. YouTube-канал: @ytautomatizations. Telegram-канал: t.me/pullytgen/3."
+source = "PDF §11; контакт менеджера берётся из SUPPORT_CONTACT"
+
+[[examples]]
+title = "пример 1"
+url = "https://drive.google.com/file/d/1ufFLod2b0bwvad0NFlDSsxr-ff4FaH-E/view?usp=sharing"
+source = "PDF §11 (ссылки Google Drive не проверялись автором спецификации)"
+
+[[examples]]
+title = "пример 2"
+url = "https://drive.google.com/file/d/1EKjo0-8znzZaa-9Snql5pKsDpggxqVwM/view?usp=sharing"
+source = "PDF §11"
+
+[[examples]]
+title = "пример 3"
+url = "https://drive.google.com/file/d/1Gzioamg7ouwxfTbfgJ34jQO3__Sc1bQO/view?usp=sharing"
+source = "PDF §11"
+
+[[examples]]
+title = "пример 4"
+url = "https://drive.google.com/file/d/1bq20s0I_MCUYUQJXD3N8GVgu2rFtdxcC/view?usp=sharing"
+source = "PDF §11"

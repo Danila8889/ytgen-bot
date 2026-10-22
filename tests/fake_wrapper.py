@@ -33,6 +33,7 @@ def tariff(tid: int, name: str, price: int, **over: Any) -> dict[str, Any]:
         "daily_stock_limit": 20,
         "period_days": 30,
         "max_ai_scenes_per_video": None,
+        "is_monthly": True,
         "capacity": {
             "ai_video_scenes_per_day": 40,
             "window_hours": 24,
@@ -45,7 +46,37 @@ def tariff(tid: int, name: str, price: int, **over: Any) -> dict[str, Any]:
         },
     }
     base.update(over)
+    if "is_monthly" not in over:
+        base["is_monthly"] = base["period_days"] == 30
     return base
+
+
+def short_tariff(tid: int, name: str, price: int, **over: Any) -> dict[str, Any]:
+    """A Lite-Start-shaped row: 7 days, the 168 h window, image/stock videos per WINDOW (not per day)."""
+    cap = {
+        "ai_video_scenes_per_day": 100, "window_hours": 168, "ai_video_videos_per_window": 2,
+        "image_stock_videos_per_window": 5, "images_per_day": 200, "stock_per_day": 100, "video_max_minutes": None,
+    }
+    return tariff(tid, name, price, period_days=7, daily_job_limit=7, daily_scene_limit=100, daily_image_limit=200,
+                  daily_stock_limit=100, max_ai_scenes_per_video=100, capacity=cap, **over)
+
+
+def funnel_tariffs() -> list[dict[str, Any]]:
+    """The four-tariff shape the funnel needs, with deliberately unusual numbers (nothing may be a baked-in constant).
+    Listed out of price order on purpose: roles come from rank, not from position or name."""
+    def monthly(tid: int, name: str, price: int, ai: int, per_day: int, scenes: int, images: int, stock: int):
+        cap = {"ai_video_scenes_per_day": scenes, "window_hours": 24, "ai_video_videos_per_window": ai,
+               "ai_video_videos_per_48h": ai, "image_stock_videos_per_day": per_day, "images_per_day": images,
+               "stock_per_day": stock, "video_max_minutes": None}
+        return tariff(tid, name, price, daily_job_limit=ai + per_day, daily_scene_limit=scenes,
+                      daily_image_limit=images, daily_stock_limit=stock, capacity=cap)
+
+    return [
+        monthly(24, "Макс", 33333, 9, 8, 777, 1234, 1235),
+        short_tariff(21, "Пробный", 4321, ),
+        monthly(22, "Месяц", 11111, 5, 3, 321, 555, 556),
+        monthly(23, "Месяц плюс", 22222, 7, 6, 654, 888, 889),
+    ]
 
 
 class FakeWrapper:
@@ -118,6 +149,16 @@ class FakeWrapper:
         return httpx.MockTransport(self._handle)
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/public/tariffs":  # unauthenticated, never carries the service key
+            self.requests.append({"method": request.method, "path": "/v1/public/tariffs",
+                                  "headers": dict(request.headers), "json": None})
+            queued = self.queued.get((request.method, "/v1/public/tariffs"))
+            if queued:
+                item = queued.popleft()
+                if isinstance(item, Exception):
+                    raise item
+                return item
+            return httpx.Response(200, json=self.tariffs)
         path = request.url.path.removeprefix("/v1/bot")
         body = json.loads(request.content) if request.content else None
         self.requests.append(

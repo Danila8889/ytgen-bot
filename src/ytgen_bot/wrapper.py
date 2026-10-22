@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 API_PREFIX = "/v1/bot"
+PUBLIC_TARIFFS_PATH = "/v1/public/tariffs"
 DEFAULT_TIMEOUT_S = 20.0
 
 
@@ -98,9 +99,14 @@ class WrapperClient:
             transport=transport,
             follow_redirects=False,
         )
+        # Public, unauthenticated route: a separate client so the service key is never sent to it.
+        self._public = httpx.AsyncClient(
+            base_url=base_url.rstrip("/"), timeout=timeout_s, transport=transport, follow_redirects=False,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        await self._public.aclose()
 
     async def _send(
         self, method: str, path: str, uid: int, json: dict[str, Any] | None = None
@@ -193,6 +199,24 @@ class WrapperClient:
         except ValidationError as exc:
             log.error("wrapper_contract_mismatch", extra={"method": "GET", "path": "/tariffs", "tg_user": uid})
             raise WrapperContractError("GET /tariffs: unexpected response shape") from exc
+
+    async def public_tariffs(self) -> Any:
+        """`GET /v1/public/tariffs` (no auth, no per-user event): the raw JSON, validated by `funnel.tariffs`."""
+        try:
+            response = await self._public.get(PUBLIC_TARIFFS_PATH)
+        except httpx.HTTPError as exc:
+            log.error("wrapper_unreachable", extra={"method": "GET", "path": PUBLIC_TARIFFS_PATH, "error": type(exc).__name__})
+            raise WrapperUnavailable(type(exc).__name__) from exc
+        if not response.is_success:
+            error = parse_error(response)
+            log.warning("wrapper_error", extra={"method": "GET", "path": PUBLIC_TARIFFS_PATH, "status": error.status,
+                                                "code": error.code})
+            raise error
+        try:
+            return response.json()
+        except ValueError as exc:
+            log.error("wrapper_contract_mismatch", extra={"method": "GET", "path": PUBLIC_TARIFFS_PATH})
+            raise WrapperContractError(f"GET {PUBLIC_TARIFFS_PATH}: response is not JSON") from exc
 
     async def quote(
         self, uid: int, tariff_id: int, promo_code: str | None = None

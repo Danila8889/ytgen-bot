@@ -1,0 +1,89 @@
+[
+    {
+        "id": 11,
+        "name": "Lite Start",
+        "price_rub": 4250,
+        "daily_job_limit": 7,
+        "daily_scene_limit": 100,
+        "daily_image_limit": 200,
+        "daily_stock_limit": 100,
+        "period_days": 7,
+        "max_ai_scenes_per_video": 100,
+        "is_monthly": false,
+        "capacity": {
+            "ai_video_scenes_per_day": 100,
+            "window_hours": 168,
+            "ai_video_videos_per_window": 2,
+            "image_stock_videos_per_window": 5,
+            "images_per_day": 200,
+            "stock_per_day": 100,
+            "video_max_minutes": null
+        }
+    },
+    {
+        "id": 7,
+        "name": "Base",
+        "price_rub": 12900,
+        "daily_job_limit": 4,
+        "daily_scene_limit": 160,
+        "daily_image_limit": 400,
+        "daily_stock_limit": 400,
+        "period_days": 30,
+        "max_ai_scenes_per_video": null,
+        "is_monthly": true,
+        "capacity": {
+            "ai_video_scenes_per_day": 160,
+            "window_hours": 24,
+            "ai_video_videos_per_window": 2,
+            "ai_video_videos_per_48h": 2,
+            "image_stock_videos_per_day": 2,
+            "images_per_day": 400,
+            "stock_per_day": 400,
+            "video_max_minutes": null
+        }
+    },
+    {
+        "id": 8,
+        "name": "Pro",
+        "price_rub": 23900,
+        "daily_job_limit": 7,
+        "daily_scene_limit": 400,
+        "daily_image_limit": 800,
+        "daily_stock_limit": 800,
+        "period_days": 30,
+        "max_ai_scenes_per_video": null,
+        "is_monthly": true,
+        "capacity": {
+            "ai_video_scenes_per_day": 400,
+            "window_hours": 24,
+            "ai_video_videos_per_window": 3,
+            "ai_video_videos_per_48h": 3,
+            "image_stock_videos_per_day": 4,
+            "images_per_day": 800,
+            "stock_per_day": 800,
+            "video_max_minutes": null
+        }
+    },
+    {
+        "id": 9,
+        "name": "Ultra",
+        "price_rub": 29900,
+        "daily_job_limit": 10,
+        "daily_scene_limit": 500,
+        "daily_image_limit": 1400,
+        "daily_stock_limit": 1400,
+        "period_days": 30,
+        "max_ai_scenes_per_video": null,
+        "is_monthly": true,
+        "capacity": {
+            "ai_video_scenes_per_day": 500,
+            "window_hours": 24,
+            "ai_video_videos_per_window": 4,
+            "ai_video_videos_per_48h": 4,
+            "image_stock_videos_per_day": 6,
+            "images_per_day": 1400,
+            "stock_per_day": 1400,
+            "video_max_minutes": null
+        }
+    }
+]

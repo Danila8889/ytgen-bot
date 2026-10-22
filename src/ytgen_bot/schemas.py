@@ -88,6 +88,9 @@ class Tariff(_Model):
     period_days: int
     max_ai_scenes_per_video: int | None = None
     capacity: TariffCapacity | None = None
+    # Added by the wrapper on 2026-10-22 (0fe0f06). Optional HERE so the checkout screens keep working against an
+    # older wrapper; the funnel (`funnel.tariffs`) requires it and treats its absence as a contract error.
+    is_monthly: bool | None = None
 
 
 class PromoQuote(_Model):
