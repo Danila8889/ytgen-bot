@@ -21,6 +21,7 @@ async def test_every_route_carries_both_headers_and_uses_the_documented_path():
     fake.link(UID)
     fake.consent(UID)
     pid = fake.new_payment()
+    fake.latest[UID] = pid
     c = client(fake)
     await c.start(UID, language="ru", consent=True, referral_code="ABC")
     await c.opt_out(UID)
@@ -33,6 +34,7 @@ async def test_every_route_carries_both_headers_and_uses_the_documented_path():
     await c.quote(UID, 11, "SAVE10XX")
     await c.checkout(UID, 11, "https://t.me/ytgen_test_bot?start=paid", "SAVE10XX")
     await c.payment_status(UID, pid)
+    await c.latest_payment(UID)
     await c.referral(UID)
     await c.request_withdrawal(UID, 300)
     seen = [(r["method"], r["path"]) for r in fake.requests]
@@ -40,7 +42,7 @@ async def test_every_route_carries_both_headers_and_uses_the_documented_path():
         ("POST", "/start"), ("POST", "/opt-out"), ("POST", "/blocked"), ("GET", "/me"),
         ("POST", "/link/request-code"), ("POST", "/link/verify"), ("GET", "/tariffs"),
         ("POST", "/billing/quote"), ("POST", "/billing/checkout"), ("GET", f"/billing/payments/{pid}"),
-        ("GET", "/referral"), ("POST", "/referral/withdrawals"),
+        ("GET", "/billing/payments/latest"), ("GET", "/referral"), ("POST", "/referral/withdrawals"),
     ]
     for r in fake.requests:
         assert r["headers"]["x-bot-service-key"] == SERVICE_KEY
@@ -166,4 +168,38 @@ async def test_redirects_are_not_followed():
     with pytest.raises(WrapperError) as exc:
         await c.me(UID)
     assert exc.value.status == 302
+    await c.aclose()
+
+
+async def test_me_carries_the_bot_user_state_and_creates_nothing():
+    fake = FakeWrapper()
+    c = client(fake)
+    never = await c.me(UID)
+    assert (never.linked, never.consented, never.blocked) == (False, False, False)
+    assert fake.users == {}  # read-only: the fake (like the wrapper) creates no row
+    fake.consent(UID)
+    assert (await c.me(UID)).consented is True
+    fake.user(UID)["opted_out_at"] = "2026-10-22T11:00:00Z"
+    assert (await c.me(UID)).consented is False  # opted out keeps consent_at but is not consent
+    fake.user(UID).update(opted_out_at=None, blocked_at="2026-10-22T12:00:00Z")
+    me = await c.me(UID)
+    assert me.blocked is True and me.consented is True
+    await c.aclose()
+
+
+async def test_latest_payment_shape_and_404():
+    fake = FakeWrapper()
+    fake.link(UID)
+    c = client(fake)
+    with pytest.raises(WrapperError) as exc:
+        await c.latest_payment(UID)
+    assert (exc.value.status, exc.value.code) == (404, "payment_not_found")
+    pid = fake.new_payment("succeeded", True)
+    fake.latest[UID] = pid
+    status = await c.latest_payment(UID)
+    assert (status.payment_id, status.status, status.credited) == (pid, "succeeded", True)
+    fake.linked.pop(UID)
+    with pytest.raises(WrapperError) as exc:
+        await c.latest_payment(UID)
+    assert exc.value.code == "telegram_not_linked"
     await c.aclose()

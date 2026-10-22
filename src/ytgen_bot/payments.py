@@ -34,19 +34,27 @@ def backoff_delays(total_s: float = WATCH_TOTAL_S, first: float = 3.0, factor: f
 
 
 async def announce(ctx: AppContext, bot: Bot, uid: int, status: schemas.PaymentStatus) -> bool:
-    """Send the final message for a terminal payment; False when it is not terminal yet."""
+    """Send the final message for a terminal payment; False when it is not terminal yet.
+
+    A user who opted out (/stop) is not messaged: the result is only logged. If their state cannot be read the
+    message is sent anyway (it answers a payment they started).
+    """
+    succeeded = status.status == "succeeded" and status.credited
+    if status.status != "canceled" and not succeeded:
+        return False
+    try:
+        me = await ctx.wrapper.me(uid)
+    except (WrapperError, WrapperUnavailable, WrapperContractError):
+        log.exception("me_after_payment_failed", extra={"tg_user": uid})
+        me = None
+    if me is not None and not me.consented:
+        log.info("payment_result_not_sent_opted_out", extra={"tg_user": uid, "payment_id": status.payment_id})
+        return True
     if status.status == "canceled":
         await say(ctx, bot, uid, texts.payment_canceled(status.cancellation_reason))
-        return True
-    if status.status == "succeeded" and status.credited:
-        try:
-            me = await ctx.wrapper.me(uid)
-        except (WrapperError, WrapperUnavailable, WrapperContractError):
-            log.exception("me_after_payment_failed", extra={"tg_user": uid})
-            me = None
+    else:
         await say(ctx, bot, uid, texts.payment_success(me))
-        return True
-    return False
+    return True
 
 
 class PaymentWatchers:
@@ -101,9 +109,6 @@ class PaymentWatchers:
         last: schemas.PaymentStatus | None = None
         for delay in self._delays():
             await self._sleep(delay)
-            if ctx.consent.get(uid) is False:
-                log.info("payment_watch_stopped_opted_out", extra={"tg_user": uid, "payment_id": payment_id})
-                return
             try:
                 last = await ctx.wrapper.payment_status(uid, payment_id)
             except WrapperError as exc:

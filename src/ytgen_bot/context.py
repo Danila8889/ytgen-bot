@@ -5,7 +5,6 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 from .config import Settings
-from .consent import ConsentCache
 from .ratelimit import ActionGuard, TokenBucket
 from .wrapper import WrapperClient
 
@@ -18,7 +17,6 @@ class AppContext:
     settings: Settings
     wrapper: WrapperClient
     bot_username: str
-    consent: ConsentCache = dataclasses.field(default_factory=ConsentCache)
     limiter: TokenBucket = dataclasses.field(default_factory=TokenBucket)
     guard: ActionGuard = dataclasses.field(default_factory=ActionGuard)
     watchers: "PaymentWatchers | None" = None

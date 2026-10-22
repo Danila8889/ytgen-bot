@@ -14,7 +14,6 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from . import keyboards, texts
-from .consent import has_consent
 from .context import AppContext
 from .ui import answer, fail, mark_blocked, say
 
@@ -74,9 +73,10 @@ class ConsentMiddleware(BaseMiddleware):
         bot: Bot = data["bot"]
         if uid is None:
             return None
-        language = getattr(getattr(event, "from_user", None), "language_code", None)
         try:
-            consented = await has_consent(self._ctx.wrapper, self._ctx.consent, uid, language)
+            # Consent is read from the wrapper (GET /me: read-only, no row, no event), never remembered here,
+            # so it survives a restart and an opt-out takes effect at once.
+            consented = (await self._ctx.wrapper.me(uid)).consented
         except Exception as exc:
             if isinstance(event, CallbackQuery):
                 await answer(event)

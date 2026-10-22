@@ -49,6 +49,17 @@ class MeResponse(_Model):
     telegram_user_id: int
     linked: bool
     tenant: MeTenant | None = None
+    # The bot user's state, read-only and present before a link too (all null/false for a user who never
+    # pressed Start). This is where consent is read; `POST /start` is never used as a probe.
+    consent_at: dt.datetime | None = None
+    opted_out_at: dt.datetime | None = None
+    blocked: bool = False
+    blocked_at: dt.datetime | None = None
+
+    @property
+    def consented(self) -> bool:
+        """Consent given and not withdrawn (an opt-out keeps `consent_at`; only a new consent clears it)."""
+        return self.consent_at is not None and self.opted_out_at is None
 
 
 class LinkRequestCodeResponse(_Model):

@@ -8,6 +8,11 @@ The "how". See root `CLAUDE.md` for the "what and why". This file assumes you ag
   anything there; SSH is for read-only diagnosis.
 - Commits go to `main` once the full suite is green (the sibling repos' no-PR convention); non-trivial work may use a
   branch first. Commits are atomic: one logical change each.
+- **CI runs on the self-hosted runner, unlike the sibling repos** (`test` and `deploy` both `[self-hosted, ytgen-bot-vps]`).
+  Reason: GitHub-hosted jobs on this private repo do not start while the account has a billing problem. Keep it safe:
+  `deploy` `needs: test` (one runner, one job at a time, no circular wait), `test` has a timeout and no concurrency group, and
+  the test checkout uses `path: .ci-test-src` so it never moves HEAD or `git clean`s the production checkout (rollback reads
+  `git rev-parse HEAD`; `.env` is gitignored). If hosted runners come back, switching `test` to `ubuntu-latest` is a one-line change.
 - **Deploys are `workflow_dispatch`-only** (`gh workflow run ci.yml --ref main`), on the self-hosted runner labelled
   `ytgen-bot-vps`. Pushing to `main` runs tests only. Never wire deploy to push.
 - The deploy job renders `.env` (`scripts/render_env.sh`), runs `docker compose up -d --build`, then
@@ -67,8 +72,8 @@ and log masking where it logs user data.
   loopback-bound listener. Use the public https URL (README "Reaching the wrapper from Docker"). Do not "simplify" it to loopback.
 - **`BOT_DEEP_LINK_BASE` (wrapper) must name this bot.** The bot builds `return_url` from `getMe`'s username; a mismatch is
   `422 return_url_not_allowed` on every checkout.
-- **`POST /start` is the only way to read consent**; each call is a counted `start` event and clears `blocked_at`. Do not call it
-  on every update (the consent hint in `consent.py` exists for that).
+- **Consent is read with `GET /me`** (read-only). Never use `POST /start` as a probe: it is a counted `start` event and clears
+  `blocked_at`. The bot keeps no consent state, so it survives restarts and an opt-out applies at once.
 - **aiogram routers attach to one parent only**: handler modules expose `build_router()` (called once per dispatcher), not a
   module-level `router`.
 - **An env value with `$`, quotes or a backtick** breaks `docker compose` env-file parsing; `render_env.sh` refuses such values.

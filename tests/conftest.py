@@ -101,9 +101,8 @@ def _instant_sleep():
 
 @pytest.fixture
 def consented(h: Harness) -> Harness:
-    """UID has consented (wrapper state AND the process cache, as after pressing the button)."""
+    """UID has consented (server-side state, exactly what a returning user has)."""
     h.fake.consent(UID)
-    h.ctx.consent.set(UID, True)
     return h
 
 

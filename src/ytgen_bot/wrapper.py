@@ -1,11 +1,11 @@
 """HTTP client for the wrapper's /v1/bot API: the only thing the bot talks to besides Telegram.
 
-Every call carries X-Bot-Service-Key and X-Telegram-User-Id. Non-2xx answers become a `WrapperError`
-carrying the machine code from `{"detail": {"error": <code>, ...}}`; the two shapes the wrapper also emits
-that are NOT of that form (a plain-string `detail`, e.g. the tariff 404, and FastAPI's list-shaped 422
-validation errors) get synthetic codes (`http_<status>`, `validation_error`). Nothing is retried here:
-a retry of a state-changing call is the caller's decision, and the wrapper's own duplicate guard covers
-the checkout.
+Every call carries X-Bot-Service-Key and X-Telegram-User-Id. Non-2xx answers become a `WrapperError` carrying
+the machine code from `{"detail": {"error": <code>, ...}}`. Two other shapes get generic codes: FastAPI's
+list-shaped 422 body-validation `detail` (`validation_error`; the contract says bot routes keep it) and any
+plain-string or non-JSON body (`http_<status>`; the bot routes no longer emit plain strings, the unknown-tariff
+404 is `tariff_not_found`, so this is only a fallback). Nothing is retried here: a retry of a state-changing
+call is the caller's decision, and the wrapper's own duplicate guard covers the checkout.
 """
 from __future__ import annotations
 
@@ -208,6 +208,11 @@ class WrapperClient:
         return await self._call(
             "GET", f"/billing/payments/{payment_id}", uid, schemas.PaymentStatus
         )
+
+    async def latest_payment(self, uid: int) -> schemas.PaymentStatus:
+        """The caller's most recent bot checkout (what the `?start=paid` return refers to);
+        404 `payment_not_found` when there is none."""
+        return await self._call("GET", "/billing/payments/latest", uid, schemas.PaymentStatus)
 
     # --- referral -----------------------------------------------------------------------------
 

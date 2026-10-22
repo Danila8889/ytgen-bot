@@ -10,23 +10,39 @@ on:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    # DEVIATION from the sibling repos (they use `ubuntu-latest`): GitHub-hosted jobs on this PRIVATE repo do not
+    # start while the account has a billing problem, so the suite runs on the same self-hosted runner as deploy.
+    #
+    # Two jobs, one runner, no deadlock: (1) a runner executes one job at a time and `deploy` `needs: test`, so
+    # within a run the two never compete, and nothing waits for something that waits for it; (2) only `deploy`
+    # has a concurrency group (cancel-in-progress: false), so a queued deploy never blocks a test; (3) a hard
+    # `timeout-minutes` stops a hung test from holding the runner forever.
+    #
+    # Workspace isolation: the runner's workspace root is the production checkout that `deploy` reuses
+    # (`clean: false`, rendered `.env`, `git rev-parse HEAD` = the deployed commit used for rollback). The test
+    # checkout therefore goes into its own subdirectory, so it can neither move HEAD nor `git clean` the `.env`.
+    runs-on: [self-hosted, ytgen-bot-vps]
+    timeout-minutes: 15
     # The suite needs no secrets and no network: the wrapper is faked with httpx.MockTransport and Telegram
     # with a recording aiogram session (tests/conftest.py fails any real outbound connection).
     steps:
-      - name: Checkout
+      - name: Checkout (isolated from the deploy workspace)
         uses: actions/checkout@v4
+        with:
+          path: .ci-test-src
 
       - name: Install uv + Python
         uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-          enable-cache: true
+          enable-cache: false
 
       - name: Install project + dev dependencies
+        working-directory: .ci-test-src
         run: uv sync --frozen
 
       - name: Run tests
+        working-directory: .ci-test-src
         run: uv run pytest -q
 
   deploy:
@@ -34,8 +50,7 @@ jobs:
     # Deploy is never automatic: workflow_dispatch only (Actions tab or `gh workflow run ci.yml --ref main`).
     if: github.event_name == 'workflow_dispatch'
     needs: test
-    # Self-hosted runner registered for this repo on the VPS (see README "Deploy"). Until it exists this job
-    # stays queued; it does not fail and does not deploy anything.
+    # The self-hosted runner registered for this repo on the VPS (see README "Deploy").
     runs-on: [self-hosted, ytgen-bot-vps]
     timeout-minutes: 20
     concurrency:

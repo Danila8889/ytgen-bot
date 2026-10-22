@@ -25,17 +25,19 @@ Telegram  <--long polling-->  ytgen-bot (aiogram 3)  <--HTTPS, X-Bot-Service-Key
 | `payments.py` | Bounded background payment poller and the terminal-state messages. |
 | `errors_ru.py` | The one place that maps wrapper error codes to Russian text, per context. |
 | `texts.py`, `keyboards.py`, `callbacks.py`, `formatting.py` | Text, buttons, validated callback data, rendering helpers. |
-| `ratelimit.py`, `consent.py` | Token bucket + action guard (debounce); bounded consent hint. |
+| `ratelimit.py` | Token bucket + action guard (debounce). |
 | `masking.py`, `logging_setup.py` | PII masking and the JSON/redacting log setup. |
 
 ## 2. What the bot remembers (all in process memory, none of it authoritative)
 
 | What | Where | Lost on restart means |
 |---|---|---|
-| Consent hint per user (True/False, bounded LRU) | `ConsentCache` | The next message triggers one `POST /start` (no consent, no referral code) that reads the stored state. |
 | Dialogue state (email, code, promo, withdrawal amount prompts) | aiogram `MemoryStorage` | The user's next message gets "не понял, откройте меню"; they start the step again. |
 | Token buckets, double-tap guards | `ratelimit.py` | Reset (harmless). |
 | Running payment pollers | `PaymentWatchers` | Polling stops; the "Проверить оплату" button (payment id in its callback data) starts a new one. |
+
+**Consent is not remembered at all**: every gated update reads it from the wrapper (`GET /me`), so it survives restarts
+and an opt-out applies at once.
 
 Everything a button needs to work after a restart is **in its callback data** (`callbacks.py`): the payment id, tariff
 id, expected amount, promo code, the referral code held by the consent button, the withdrawal amount.
@@ -45,20 +47,21 @@ id, expected amount, promo code, the referral code held by the consent button, t
 ### 3.1 Consent and `/start`
 1. `/start [payload]`. Payload: `ref_<code>` (`[A-Za-z0-9_-]{1,60}`) -> referral code; exactly `paid` -> payment screen;
    anything else is ignored and logged.
-2. Consent known `True` in memory: one `POST /start` carrying the referral code if any. Otherwise a plain
-   `POST /start {language}` (`consent` false/absent: the wrapper documents "changes nothing") reads the stored state.
+2. Consent is read with `GET /me` (`consent_at`, `opted_out_at`; read-only, creates no row, no `start` event). For a
+   consented user the bot then sends `POST /start {language, referral_code?}` (a real start: records the event, clears
+   `blocked_at`). For anyone else **nothing is written to the wrapper**.
 3. Not consented (never, or opted out): the consent text with the three links and the "Согласен" button. A referral
    code from the link is put **into the button's callback data** (`cn:<code>`), so it is not held anywhere else and not sent
    before consent. Pressing the button sends `POST /start {consent: true, referral_code?}`, then the menu.
-4. Consented and a code was present but not yet sent (cold cache): a second `POST /start` carries it. The wrapper's
-   outcome (`pending_stored`, `attributed`, `already_attributed`, `already_pending`, `rejected_*`) is shown in one
-   plain sentence; nothing promises a benefit.
-5. `ConsentMiddleware` gates every other handler: unconsented users get the consent screen (callbacks: a toast first).
+4. The wrapper's referral outcome (`pending_stored`, `attributed`, `already_attributed`, `already_pending`, `rejected_*`)
+   is shown in one plain sentence; nothing promises a benefit. A code is sent on every `/start` that carries one, also
+   for users who started organically earlier; the wrapper decides.
+5. `ConsentMiddleware` (one `GET /me` per update) gates every other handler: unconsented users get the consent screen (callbacks: a toast first).
    Exempt: `/start`, the consent button, `/stop`.
 
 ### 3.2 `/stop`
-`POST /opt-out`, then one confirmation line. A failed call is shown as a failure, never as success. The consent hint
-becomes `False`: every other command shows the consent screen, and a running payment poller stays silent.
+`POST /opt-out`, then one confirmation line. A failed call is shown as a failure, never as success. The next update
+reads `opted_out_at` from `/me`: every other command shows the consent screen, and a payment result is logged, not sent.
 Telegram `Forbidden` on any send (user blocked the bot / account gone) is caught in `ui.say` and in the guard
 middleware and reported with `POST /blocked {blocked: true}` (the wrapper clears it on the next `/start`).
 
@@ -93,8 +96,10 @@ reason when it is one of the known codes (otherwise no raw code is shown); `succ
 "paid, tariff not applied yet, check again"; still `pending` at the deadline -> "not confirmed yet"; five consecutive
 failures -> "could not check". Every timeout/give-up message carries the check button. The poller stops quietly for
 opted-out users.
-`/start paid` (the return from the payment page) carries no payment id, so it shows the `GET /me` state (tariff and expiry,
-or "if you just paid, it can take a moment; press the check button under the payment message").
+`/start paid` (the return from the payment page) carries no payment id, so it calls `GET /billing/payments/latest` and shows
+the real status with the same result messages (pending/delayed also start a poller and show the check button). Only on
+`404 payment_not_found` (no bot checkout yet) or `403 telegram_not_linked` does it fall back to the `GET /me` account state.
+A user who opted out is not messaged with a payment result (logged only).
 
 ### 3.6 Referral
 `GET /referral` for linked users (a 403 `telegram_not_linked` becomes the link prompt). Shown: the `deep_link` (if null:
@@ -119,7 +124,7 @@ specific message.
 |---|---|
 | link request | `invalid_email`, `telegram_already_linked`, `rate_limited` (cooldown / hourly buckets), `email_delivery_failed` |
 | link verify | `no_pending_code`, `code_invalid` (+`attempts_remaining`), `code_attempts_exceeded`, `rate_limited`, `telegram_already_linked`, `tenant_already_linked`, `email_ambiguous`, `tenant_inactive` |
-| quote / checkout | `promo_invalid`, `promo_expired`, `promo_exhausted`, `promo_rate_limited`, `tariff_id_required`, tariff 404 (`http_404`), `active_tariff_mismatch`, `checkout_in_progress`, `tariff_misconfigured`, `telegram_not_linked`, `tenant_inactive`, `rate_limited` |
+| quote / checkout | `promo_invalid`, `promo_expired`, `promo_exhausted`, `promo_rate_limited`, `tariff_id_required`, `tariff_not_found`, `active_tariff_mismatch`, `checkout_in_progress`, `tariff_misconfigured`, `telegram_not_linked`, `tenant_inactive`, `rate_limited` |
 | payment | `payment_not_found`, `payment_provider_unknown_status`, `telegram_not_linked` |
 | withdrawal | `withdrawal_below_minimum` (+`minimum_rub`), `insufficient_balance` (+`available_rub`), `withdrawal_already_open`, `rate_limited` |
 | operator-side (generic text for the user, ERROR in the log) | `invalid_bot_service_key`, `bot_api_disabled`, `bot_return_url_not_configured`, `return_url_not_allowed`, `invalid_telegram_user_id` |
@@ -146,21 +151,20 @@ JSON lines on stdout (`logging_setup.py`): `ts`, `level`, `logger`, `msg` (an ev
 fields (`tg_user`, `payment_id`, `code`, ...). A redaction filter replaces the configured secrets, bot-token shapes and
 email addresses even in tracebacks. httpx/httpcore are held at WARNING (they log full URLs).
 
-## 7. Contract notes (differences from the stated contract found while building; the wrapper was not changed)
+## 7. Contract notes (what remains of the differences found while building; the wrapper was not changed)
 
-1. **Tariff 404 is not an error-code object.** `POST /billing/quote` and `/billing/checkout` answer an unknown/inactive
-   tariff with `{"detail": "Tariff not found."}` (string). The client maps it to the synthetic code `http_404`.
-2. **FastAPI body-validation 422** has a list-shaped `detail`; mapped to `validation_error`.
-3. **No read-only consent field.** `GET /me` has no `consent_at` / `opted_out_at`; the only way to read them is `POST /start`
-   without `consent`, which is a counted `start` event and clears `blocked_at`. The bot does it once per user per process.
-   (Suggestion for the wrapper: add the two fields to `/me`.)
-4. **`/start paid` carries no payment id**, and there is no "latest payment" endpoint, so the screen shows the `GET /me` state
-   and points to the check button.
-5. **`BOT_DEEP_LINK_BASE` must name this bot** (the username the bot reads from `getMe`) or checkout is `422
+Resolved by wrapper `1abbd66` (the bot now uses them): consent is read from `GET /me` (`consent_at`, `opted_out_at`,
+`blocked`, `blocked_at`), `/start paid` uses `GET /billing/payments/latest`, and the unknown-tariff 404 is
+`{"detail": {"error": "tariff_not_found"}}`.
+
+1. **FastAPI body-validation 422** keeps a list-shaped `detail` on bot routes (the contract says so); mapped to `validation_error`.
+2. **`BOT_DEEP_LINK_BASE` must name this bot** (the username the bot reads from `getMe`, `ytgener_bot`) or checkout is `422
    return_url_not_allowed`; while it is unset checkout is `503` and the referral `deep_link` is null.
-6. `GET /billing/payments/{id}` asks YooKassa synchronously on each call, so the poller's delays are deliberately modest.
-7. The startup/deploy self-check calls `GET /me` with the **bot's own Telegram id** (never a real user): a read-only call
-   that writes one `bot_rate_events` row.
+3. `GET /billing/payments/{id}` and `/latest` ask YooKassa synchronously on each call, so the poller's delays are deliberately modest.
+4. The startup/deploy self-check calls `GET /me` with the **bot's own Telegram id** (never a real user). Since `1abbd66` it
+   creates no bot-user row; it only counts one `bot_call` rate event.
+5. Consent is read on every gated update (one extra `GET /me`, counted by the wrapper's 60/min per-user `bot_call` limit);
+   the bot's own token bucket (burst 6, then one per 2 s) keeps normal use well inside it.
 
 ## 8. Owner setup (one time; secret values are only ever typed in the owner's own terminal)
 
@@ -176,7 +180,7 @@ unset KEY
 
 # 3. Wrapper: BOT_DEEP_LINK_BASE=https://t.me/<bot username> in its .env.production, then redeploy the wrapper
 #    (the key is rendered at wrapper deploy time).
-# 4. This repo: set SUPPORT_CONTACT in .env.production (e.g. @name), commit, push.
+# 4. This repo: SUPPORT_CONTACT is set in .env.production (@togn15).
 # 5. Register the self-hosted runner on the VPS (below), then:
 gh workflow run ci.yml --ref main -R Danila8889/ytgen-bot
 ```

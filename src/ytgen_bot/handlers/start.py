@@ -48,34 +48,27 @@ async def cmd_start(
         log.warning("start_param_invalid", extra={"tg_user": uid})
 
     try:
-        if ctx.consent.get(uid) is True:
-            # Known consented: one call, carrying the referral code if the link had one.
+        # Consent is read with GET /me (read-only: no row, no `start` event). Nothing is written to the
+        # wrapper for a user who has not consented yet, and the referral code is only ever sent after consent.
+        me = await ctx.wrapper.me(uid)
+        result: schemas.StartResponse | None = None
+        if me.consented:
             result = await ctx.wrapper.start(uid, language=language, referral_code=param.ref_code)
-            referral_sent = param.ref_code is not None
-        else:
-            # Unknown or not consented: a plain /start (no consent, no referral code) reads the stored
-            # state; a code is only sent once the user is known to have consented.
-            result = await ctx.wrapper.start(uid, language=language)
-            referral_sent = False
-        ctx.consent.set(uid, result.consented)
-        if result.consented and param.ref_code and not referral_sent:
-            result = await ctx.wrapper.start(uid, language=language, referral_code=param.ref_code)
-            referral_sent = True
     except Exception as exc:
         await fail(ctx, bot, uid, exc, "generic")
         return
 
     log.info(
         "start",
-        extra={"tg_user": uid, "param": param.kind, "consented": result.consented, "linked": result.linked},
+        extra={"tg_user": uid, "param": param.kind, "consented": me.consented, "linked": me.linked},
     )
-    if not result.consented:
+    if result is None:
         await say(
             ctx, bot, uid, texts.consent_request(),
             keyboards.consent(param.ref_code if param.kind == "ref" else None),
         )
         return
-    if referral_sent and result.referral is None:
+    if param.ref_code and result.referral is None:
         log.warning("referral_outcome_missing", extra={"tg_user": uid})
     if param.kind == "paid":
         await show_paid_return(ctx, bot, uid)
@@ -100,7 +93,6 @@ async def on_consent(
         except Exception as exc:
             await fail(ctx, bot, uid, exc, "generic")
             return
-        ctx.consent.set(uid, result.consented)
         if not result.consented:
             log.error("consent_not_recorded", extra={"tg_user": uid})
             await say(ctx, bot, uid, texts.GENERIC_ERROR)
@@ -118,7 +110,6 @@ async def cmd_stop(message: Message, bot: Bot, ctx: AppContext, state: FSMContex
         # No fake success: the opt-out is not recorded until the wrapper says so.
         await fail(ctx, bot, uid, exc, "generic")
         return
-    ctx.consent.set(uid, False)
     log.info("opted_out", extra={"tg_user": uid})
     await say(ctx, bot, uid, texts.stopped())
 

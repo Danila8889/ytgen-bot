@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery
 from .. import callbacks, keyboards, texts
 from ..context import AppContext
 from ..payments import announce
+from ..wrapper import WrapperError
 from ..ui import answer, fail, say
 from .filters import IsAction
 
@@ -17,7 +18,34 @@ log = logging.getLogger(__name__)
 
 
 async def show_paid_return(ctx: AppContext, bot: Bot, uid: int) -> None:
-    """`/start paid`: the redirect carries no payment id, so show the account's current state."""
+    """`/start paid`: the redirect carries no payment id, so ask for the latest bot checkout and show its real
+    status and result message. Only when there is none (404) or no linked account (403) fall back to the
+    account state from `GET /me`."""
+    try:
+        status = await ctx.wrapper.latest_payment(uid)
+    except WrapperError as exc:
+        if exc.code not in ("payment_not_found", "telegram_not_linked"):
+            await fail(ctx, bot, uid, exc, "payment")
+            return
+        await _show_account_state(ctx, bot, uid)
+        return
+    except Exception as exc:
+        await fail(ctx, bot, uid, exc, "payment")
+        return
+    log.info(
+        "payment_checked",
+        extra={"tg_user": uid, "payment_id": status.payment_id, "status": status.status,
+               "credited": status.credited, "via": "latest"},
+    )
+    if await announce(ctx, bot, uid, status):
+        return
+    text = texts.payment_credit_delayed() if status.status == "succeeded" else texts.payment_still_pending()
+    await say(ctx, bot, uid, text, keyboards.check_payment(status.payment_id))
+    if ctx.watchers is not None and not ctx.watchers.active(status.payment_id):
+        ctx.watchers.watch(uid, status.payment_id)
+
+
+async def _show_account_state(ctx: AppContext, bot: Bot, uid: int) -> None:
     try:
         me = await ctx.wrapper.me(uid)
     except Exception as exc:

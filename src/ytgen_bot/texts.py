@@ -145,16 +145,10 @@ def status_linked(tenant: schemas.MeTenant) -> str:
 
 
 def back_from_payment(me: schemas.MeResponse) -> str:
-    base = "Возвращаетесь после оплаты? Вот текущее состояние.\n\n"
+    """`/start paid` when the wrapper knows no payment of this user: show the account state instead."""
+    base = "Платёж, оформленный через бота, не найден. Вот текущее состояние аккаунта.\n\n"
     if me.linked and me.tenant is not None:
-        body = status_linked(me.tenant)
-        if not me.tenant.paid_access_active:
-            body += (
-                "\n\nЕсли вы только что оплатили, зачисление может занять немного времени. "
-                "Нажмите «Проверить оплату» под сообщением со ссылкой на оплату "
-                "или обновите статус через минуту."
-            )
-        return base + body
+        return base + status_linked(me.tenant)
     return base + status_unlinked()
 
 

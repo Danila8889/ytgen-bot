@@ -95,7 +95,6 @@ async def test_one_users_flood_does_not_throttle_another(linked: Harness):
     await h.say("/help")
     await h.say("/help")
     h.fake.consent(2002)
-    h.ctx.consent.set(2002, True)
     await h.say("/help", uid=2002)
     assert h.session.sent(2002)
 

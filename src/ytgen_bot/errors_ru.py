@@ -169,7 +169,7 @@ def _tariff_mismatch(err: WrapperError, support: str) -> ErrorView:
 _ORDER = {
     **_PROMO,
     "tariff_id_required": lambda e, s: ErrorView("Выберите тариф: /tariffs"),
-    "http_404": lambda e, s: ErrorView("Этот тариф недоступен. Откройте список заново: /tariffs"),
+    "tariff_not_found": lambda e, s: ErrorView("Этот тариф недоступен. Откройте список заново: /tariffs"),
     "active_tariff_mismatch": _tariff_mismatch,
     "checkout_in_progress": lambda e, s: ErrorView(
         "Платёж уже создаётся. Подождите несколько секунд и нажмите кнопку ещё раз."
@@ -239,7 +239,7 @@ DOCUMENTED_CODES: dict[str, tuple[str, ...]] = {
         "promo_exhausted",
         "promo_rate_limited",
         "tariff_id_required",
-        "http_404",
+        "tariff_not_found",
         "telegram_not_linked",
         "tenant_inactive",
         "rate_limited",
@@ -252,7 +252,7 @@ DOCUMENTED_CODES: dict[str, tuple[str, ...]] = {
         "promo_rate_limited",
         "checkout_in_progress",
         "return_url_not_allowed",
-        "http_404",
+        "tariff_not_found",
         "tariff_misconfigured",
         "telegram_not_linked",
         "tenant_inactive",

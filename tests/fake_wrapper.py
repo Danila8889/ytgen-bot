@@ -58,6 +58,7 @@ class FakeWrapper:
         self.tariffs = [tariff(11, "Старт", 1234), tariff(12, "Профи", 5678, period_days=7)]
         self.payments: dict[str, dict[str, Any]] = {}
         self.payment_seq = 0
+        self.latest: dict[int, str] = {}  # uid -> payment id of the most recent bot checkout
         self.code = "123456"
         self.referral_info: dict[str, Any] = {
             "code": "ABCDEF123456",
@@ -182,9 +183,17 @@ class FakeWrapper:
         return httpx.Response(200, json=self._state(uid))
 
     def r_me(self, uid: int, body: Any) -> httpx.Response:
+        """Read-only: never creates a bot-user row (unlike POST /start)."""
+        u = self.users.get(uid)
+        state = {
+            "consent_at": u["consent_at"] if u else None,
+            "opted_out_at": u["opted_out_at"] if u else None,
+            "blocked": bool(u and u["blocked_at"]),
+            "blocked_at": u["blocked_at"] if u else None,
+        }
         tenant = self.linked.get(uid)
         if tenant is None:
-            return httpx.Response(200, json={"telegram_user_id": uid, "linked": False, "tenant": None})
+            return httpx.Response(200, json={"telegram_user_id": uid, "linked": False, "tenant": None, **state})
         local, _, domain = tenant["email"].partition("@")
         expires = tenant["tariff_expires_at"]
         active = bool(tenant["tariff_id"] and expires and expires > "2026-10-22T10:00:00Z")
@@ -193,6 +202,7 @@ class FakeWrapper:
             "tenant": {"email_masked": f"{local[:1]}***@{domain}", "tariff_id": tenant["tariff_id"],
                        "tariff_name": tenant["tariff_name"], "tariff_expires_at": expires,
                        "paid_access_active": active},
+            **state,
         })
 
     def r_request_code(self, uid: int, body: dict[str, Any]) -> httpx.Response:
@@ -228,7 +238,7 @@ class FakeWrapper:
             return detail_error(403, "telegram_not_linked")
         t = self._tariff(body.get("tariff_id"))
         if t is None:
-            return httpx.Response(404, json={"detail": "Tariff not found."})
+            return detail_error(404, "tariff_not_found")
         out: dict[str, Any] = {
             "tariff_id": t["id"], "plan_name": t["name"], "price_rub": t["price_rub"], "currency": "RUB",
             "period_days": t["period_days"], "period_start": NOW, "period_end": NOW, "limits": {},
@@ -248,15 +258,24 @@ class FakeWrapper:
             return detail_error(403, "telegram_not_linked")
         t = self._tariff(body["tariff_id"])
         if t is None:
-            return httpx.Response(404, json={"detail": "Tariff not found."})
+            return detail_error(404, "tariff_not_found")
         amount = t["price_rub"]
         if body.get("promo_code") == "SAVE10XX":
             amount -= amount * 10 // 100
         pid = self.new_payment()
+        self.latest[uid] = pid
         return httpx.Response(200, json={
             "payment_id": pid, "payment_url": f"https://pay.example.test/checkout/{pid}",
             "amount_rub": amount, "tariff_id": t["id"], "reused": False,
         })
+
+    def r_latest_payment(self, uid: int, body: Any) -> httpx.Response:
+        if uid not in self.linked:
+            return detail_error(403, "telegram_not_linked")
+        pid = self.latest.get(uid)
+        if pid is None:
+            return detail_error(404, "payment_not_found")
+        return self.r_payment(uid, None, pid)
 
     def r_payment(self, uid: int, body: Any, payment_id: str) -> httpx.Response:
         if uid not in self.linked:
@@ -303,6 +322,7 @@ _ROUTES = [
         (r"GET /tariffs", "r_tariffs"),
         (r"POST /billing/quote", "r_quote"),
         (r"POST /billing/checkout", "r_checkout"),
+        (r"GET /billing/payments/latest", "r_latest_payment"),  # before the {id} route, as in the wrapper
         (r"GET /billing/payments/([^/]+)", "r_payment"),
         (r"GET /referral", "r_referral"),
         (r"POST /referral/withdrawals", "r_withdraw"),

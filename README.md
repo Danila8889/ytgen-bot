@@ -18,7 +18,7 @@ the referral programme**. It is a thin client of the `youtubegen-saas-wrapper` `
 |---|---|
 | `/start` | Consent step first (links to the offer, referral terms = offer section 10, and bot data processing = privacy policy section 11). Nothing else works until the user presses "Согласен". |
 | `/start ref_<code>` | Same, and the referral code is sent to the wrapper (after consent; on every such `/start`, also for users who started organically earlier). The wrapper decides the outcome and the bot reports it. |
-| `/start paid` | Where the payment page returns the user: shows the account and tariff state. |
+| `/start paid` | Where the payment page returns the user: shows the real status/result of their latest payment (falls back to the account state only when there is none). |
 | `/tariffs` | The tariff list as the wrapper returns it. Choosing one requires a linked account (the link flow starts if there is none), then an optional promo code, a quote with the payable amount, and a payment button. |
 | payment | "Payment is being processed", background polling with backoff for up to 10 minutes, and a persistent "Проверить оплату" button (works after a restart). Result message: tariff + expiry, or cancelled/failed. |
 | `/referral` | Linked users only: personal link, counts, balances, rules from API fields, link to offer section 10, withdrawal request. Payout details are never asked for or stored; the operator contacts the user in Telegram. |
@@ -33,9 +33,10 @@ Source of truth: the wrapper's `README.md` ("Telegram bot API", "Referral progra
 `X-Telegram-User-Id`.
 
 `POST /start`, `POST /opt-out`, `POST /blocked`, `GET /me`, `POST /link/request-code`, `POST /link/verify`,
-`GET /tariffs`, `POST /billing/quote`, `POST /billing/checkout`, `GET /billing/payments/{payment_id}`, `GET /referral`,
+`GET /tariffs`, `POST /billing/quote`, `POST /billing/checkout`, `GET /billing/payments/latest`, `GET /billing/payments/{payment_id}`, `GET /referral`,
 `POST /referral/withdrawals`. Errors are `{"detail": {"error": <code>, ...}}`, with two exceptions the bot handles
-(see "Contract notes" in `documentation.md`): a plain-string `detail` (the tariff 404) and FastAPI's list-shaped 422.
+(see "Contract notes" in `documentation.md`): FastAPI's list-shaped 422 body-validation `detail`. Needs wrapper `1abbd66` or later
+(`GET /me` with the bot-user state, `GET /billing/payments/latest`, `tariff_not_found`).
 
 The wrapper must have **both** `BOT_SERVICE_API_KEY` (equal to the bot's) **and** `BOT_DEEP_LINK_BASE`
 (`https://t.me/<bot username>`) set, or the bot cannot work: without the key every call is `503 bot_api_disabled`
@@ -51,7 +52,7 @@ Names only; values are never committed. `.env.example` lists them.
 | `BOT_TOKEN` | yes | yes | owner: GitHub secret `BOT_TOKEN` | Telegram bot token from BotFather. |
 | `BOT_SERVICE_API_KEY` | yes | yes | owner: GitHub secret `BOT_SERVICE_API_KEY` | Must equal the wrapper's `BOT_SERVICE_API_KEY` (>= 32 chars, `openssl rand -hex 32`). |
 | `WRAPPER_BASE_URL` | no | yes | `.env.production` (committed) | Wrapper base URL **as seen from the container**. `https` only (plain `http` is accepted for loopback, for local runs). |
-| `SUPPORT_CONTACT` | no | yes | `.env.production` (owner fills in; committed empty) | Shown in `/help` and the withdrawal confirmation (e.g. `@name`). |
+| `SUPPORT_CONTACT` | no | yes | `.env.production` (committed, owner-provided) | Shown in `/help` and the withdrawal confirmation (e.g. `@name`). |
 | `LOG_LEVEL` | no | no | `.env.production` | `DEBUG`/`INFO`/`WARNING`/`ERROR`, default `INFO`. |
 | `HEARTBEAT_FILE` | no | no | default | Heartbeat path read by the container healthcheck, default `/tmp/ytgen-bot.heartbeat`. |
 | `DOCKER_LOG_MAX_SIZE`, `DOCKER_LOG_MAX_FILE` | no | no | default | Docker log rotation, default `20m` / `5`. |
@@ -90,7 +91,12 @@ Locally against a wrapper on your machine use `WRAPPER_BASE_URL=http://127.0.0.1
 
 ## Deploy
 
-`.github/workflows/ci.yml`: the `test` job runs on every push/PR to `main`. The `deploy` job runs **only on
+`.github/workflows/ci.yml`: the `test` job runs on every push/PR to `main`. Both jobs run on the self-hosted runner
+labelled `ytgen-bot-vps`. **This differs from the sibling repos** (their `test` job uses `ubuntu-latest`): GitHub-hosted
+jobs on this private repo do not start while the account has a billing problem. A runner executes one job at a time and
+`deploy` `needs: test`, so the two cannot deadlock each other (only `deploy` has a concurrency group; `test` has a
+timeout), and the test checkout goes into `.ci-test-src/` so it can never move HEAD or clean the `.env` of the
+production checkout that `deploy` reuses. The `deploy` job runs **only on
 `workflow_dispatch`** (`gh workflow run ci.yml --ref main`), on the self-hosted runner labelled `ytgen-bot-vps`, after
 `test`:
 
@@ -104,7 +110,7 @@ Locally against a wrapper on your machine use `WRAPPER_BASE_URL=http://127.0.0.1
    (`always() && !cancelled() && (...failure)`), and fails the run either way.
 
 One-time prerequisites (owner): the GitHub secrets `BOT_TOKEN` and `BOT_SERVICE_API_KEY` on this repo, the same
-`BOT_SERVICE_API_KEY` on the wrapper repo, `SUPPORT_CONTACT` filled in `.env.production`, the wrapper's
+`BOT_SERVICE_API_KEY` on the wrapper repo, `SUPPORT_CONTACT` in `.env.production`, the wrapper's
 `BOT_DEEP_LINK_BASE` set to `https://t.me/<this bot's username>`, and the self-hosted runner registered for this repo.
 The exact commands are in `documentation.md` ("Owner setup").
 

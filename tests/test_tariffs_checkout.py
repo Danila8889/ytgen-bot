@@ -6,7 +6,7 @@ import asyncio
 import httpx
 import pytest
 
-from tests.conftest import UID, Harness
+from tests.conftest import Harness
 from tests.fake_wrapper import tariff
 from tests.mocked_telegram import BOT_USERNAME, buttons
 from ytgen_bot import callbacks, texts
@@ -98,8 +98,6 @@ async def test_full_flow_with_promo_shows_the_payable_amount_and_sends_the_code(
 async def test_pay_button_works_after_a_restart(linked: Harness):
     """Everything it needs is in the callback data; no FSM or cache involved."""
     h = linked
-    h.ctx.consent.set(UID, False)  # pretend a fresh process
-    h.ctx.consent._data.clear()
     await h.press(callbacks.pay(11, 1234, "SAVE10XX"))
     assert h.fake.calls("POST", "/billing/checkout")[-1]["json"]["promo_code"] == "SAVE10XX"
 
@@ -157,12 +155,23 @@ async def test_checkout_in_progress_message(linked: Harness):
     assert "уже создаётся" in h.last
 
 
-async def test_tariff_404_with_string_detail_is_handled(linked: Harness):
-    """The wrapper's tariff 404 is `{"detail": "Tariff not found."}`, not an error-code object."""
+async def test_unknown_tariff_is_mapped_explicitly(linked: Harness, caplog):
+    """Bot routes answer 404 `{"detail": {"error": "tariff_not_found"}}` for an unknown tariff."""
+    h = linked
+    await h.press(callbacks.pay(99, 1234))
+    assert "Этот тариф недоступен" in h.last
+    await h.press(callbacks.quote(99))
+    assert "Этот тариф недоступен" in h.last
+    assert not any(r.message == "wrapper_error_unmapped" for r in caplog.records)
+
+
+async def test_a_plain_string_404_is_no_longer_special_cased(linked: Harness, caplog):
+    """Generic handling for shapes the contract does not describe: generic message + an ERROR log."""
     h = linked
     h.fake.queue("POST", "/billing/checkout", httpx.Response(404, json={"detail": "Tariff not found."}))
     await h.press(callbacks.pay(99, 1234))
-    assert "Этот тариф недоступен" in h.last
+    assert h.last == texts.GENERIC_ERROR
+    assert any(r.message == "wrapper_error_unmapped" for r in caplog.records)
 
 
 async def test_not_linked_on_checkout_offers_linking(consented: Harness):
