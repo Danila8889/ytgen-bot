@@ -15,9 +15,10 @@ The "how". See root `CLAUDE.md` for the "what and why". This file assumes you ag
   `git rev-parse HEAD`; `.env` is gitignored). If hosted runners come back, switching `test` to `ubuntu-latest` is a one-line change.
 - **Deploys are `workflow_dispatch`-only** (`gh workflow run ci.yml --ref main`), on the self-hosted runner labelled
   `ytgen-bot-vps`. Pushing to `main` runs tests only. Never wire deploy to push.
-- The deploy job renders `.env` (`scripts/render_env.sh`), runs `docker compose up -d --build`, then
-  `scripts/post_deploy_check.sh` (container healthy + `python -m ytgen_bot selfcheck`); on failure it rolls back to the
-  previous commit with the repo-wide pattern `always() && !cancelled() && (steps.deploy.outcome == 'failure' ||
+- The deploy job renders `.env` (`scripts/render_env.sh`), runs `docker compose up -d --build` (compose starts `db`, waits
+  for it to be healthy, runs the one-shot `migrate` service, then the bot), then `scripts/post_deploy_check.sh` (db healthy,
+  migrate exited 0, bot healthy, `python -m ytgen_bot selfcheck`: DB reachable and at head, wrapper tariff contract valid, no
+  live LLM call); on failure it rolls back to the previous commit with the repo-wide pattern `always() && !cancelled() && (steps.deploy.outcome == 'failure' ||
   steps.healthcheck.outcome == 'failure')`. Do not weaken that condition.
 
 ## Documentation stays current
@@ -29,9 +30,10 @@ none applied and why.
 
 ## Adding or changing an env var
 
-1. Decide: **secret** (credential/token/key, or a value that works as a bearer credential) -> GitHub secret, named in
+1. Decide: **secret** (credential/token/key/password, or a value that works as a bearer credential) -> GitHub secret, named in
    `SECRET_KEYS` of `scripts/render_env.sh` **and** mapped in the `deploy` job's `env:` block of `ci.yml` (a secret with no
-   mapping never reaches the VPS). **Non-secret** -> `.env.production`; add it to `REQUIRED_PLAIN_KEYS` if the bot cannot run without it.
+   mapping never reaches the VPS) **and** listed in `Settings.secrets` (log redaction). **Non-secret** -> `.env.production`; add
+   it to `REQUIRED_PLAIN_KEYS` if the bot cannot run without it.
 2. Validate it in `config.py` (fail fast, name the variable, never print the value) and add a test in `tests/test_config.py`.
 3. List it in `.env.example` (names only), the README table, and classify it in `ytgen-infra/env-vars/ytgen-bot.md`
    (owner/orchestrator task: that repo is not edited from here).
@@ -63,12 +65,30 @@ none applied and why.
 
 ## Testing
 
-`uv run pytest -q` before calling a task done. No network and no secrets are needed: the wrapper is faked by
+`uv run pytest -q` before calling a task done. No outbound network and no secrets are needed: the wrapper is faked by
 `tests/fake_wrapper.py` (httpx `MockTransport`, response shapes copied from the real code, including the quirky ones), Telegram by
-`tests/mocked_telegram.py` (a recording aiogram session; handlers are driven through `Dispatcher.feed_update`).
-`tests/conftest.py` fails any real outbound connection (even if the caller swallows the exception).
+`tests/mocked_telegram.py` (a recording aiogram session; handlers are driven through `Dispatcher.feed_update`), the LLM by
+recorded provider replies (`tests/test_ai_layer.py`, `tests/test_ai_client.py`; the funnel tests use `ScriptedAi`).
+`tests/conftest.py` fails any real outbound connection (loopback is allowed, for the test database).
+
+**The suite needs a throw-away Postgres** (`tests/pg.py`): a `postgres:16-alpine` container published on `127.0.0.1` with a
+docker-chosen random port (fallback: local `initdb`/`postgres` binaries on a random loopback port), migrated through the real
+Alembic path, torn down when the run ends. Never a production database, never a well-known host port (the VPS host uses 5432,
+5433, 5434, 6379, 6380, 8088, 8090, 3000, 8080, 8100, 5555, 8081). The CI `test` job runs on the production VPS's self-hosted
+runner: keep tests light and isolated. Funnel tests drive the real dispatcher with a real database; isolation tests point the
+funnel at a dead port. `tests/clock.py` is the controllable clock for reminders, limits and retention.
+
 New behaviour needs tests for: its error mappings, the consent gate where relevant, double-tap where it changes state,
-and log masking where it logs user data.
+log masking where it logs user data, and - for anything funnel-side - what happens with the funnel database unavailable.
+
+## Database
+
+- All SQL lives in `src/ytgen_bot/db/store.py`; every public method either succeeds or raises `StoreError` after an ERROR log.
+  Callers inside funnel flows show it (`funnel.flow._shown`); hooks called from money flows are `_isolated`.
+- Migrations: `src/ytgen_bot/db/migrations/versions/`, hand-written, **additive only** (tables, nullable/defaulted columns,
+  indexes); `tests/test_db_store.py` pins that the migrated schema equals `db/schema.py` and that no revision drops, renames or
+  retypes. Applied by the one-shot compose service (`python -m ytgen_bot migrate`, idempotent, advisory-locked).
+- A new funnel field needs the owner's flag (CLAUDE.md "Always flag").
 
 ## Lint
 
