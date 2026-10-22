@@ -114,6 +114,11 @@ def test_workflow_deploys_only_on_dispatch_and_uses_the_rollback_pattern():
     checkout = next(step for step in test["steps"] if str(step.get("uses", "")).startswith("actions/checkout"))
     assert checkout["with"]["path"] == ".ci-test-src"  # never touches the deploy workspace root
     assert all(step.get("working-directory") == ".ci-test-src" for step in test["steps"] if "run" in step)
+    # setup-uv must not create/activate a venv at the workspace root (breaks the 2nd run, pollutes the deploy checkout)
+    setup = next(step for step in test["steps"] if str(step.get("uses", "")).startswith("astral-sh/setup-uv"))
+    assert "python-version" not in setup["with"] and setup["with"]["activate-environment"] is False
+    assert test["env"]["UV_PROJECT_ENVIRONMENT"].endswith("/.ci-test-src/.venv")
+    assert test["env"]["UV_PYTHON"] == "3.12"
     assert "always() && !cancelled() && (steps.deploy.outcome == 'failure' || steps.healthcheck.outcome == 'failure')" in text
     assert set(deploy["env"]) == {"BOT_TOKEN", "BOT_SERVICE_API_KEY"}
     assert wf[True]["push"]["branches"] == ["main"]  # `on:` parses as the boolean key True

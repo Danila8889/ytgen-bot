@@ -23,6 +23,13 @@ jobs:
     # checkout therefore goes into its own subdirectory, so it can neither move HEAD nor `git clean` the `.env`.
     runs-on: [self-hosted, ytgen-bot-vps]
     timeout-minutes: 15
+    # Everything uv creates stays inside .ci-test-src. Do NOT pass `python-version` to setup-uv: it then runs
+    # `uv venv` and "activates" a `.venv` at the WORKSPACE ROOT (the production checkout), which pollutes it and
+    # makes every run after the first fail ("Activating python venv..." -> exit 2). The interpreter is chosen
+    # with UV_PYTHON instead and the project environment is pinned inside the test directory.
+    env:
+      UV_PYTHON: "3.12"
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.ci-test-src/.venv
     # The suite needs no secrets and no network: the wrapper is faked with httpx.MockTransport and Telegram
     # with a recording aiogram session (tests/conftest.py fails any real outbound connection).
     steps:
@@ -34,8 +41,8 @@ jobs:
       - name: Install uv + Python
         uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
           enable-cache: false
+          activate-environment: false
 
       - name: Install project + dev dependencies
         working-directory: .ci-test-src
