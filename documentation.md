@@ -82,17 +82,14 @@ API returned) -> pick -> `GET /me` (not linked: link flow first) -> optional pro
 - `return_url = https://t.me/<bot_username>?start=paid`, `bot_username` from `getMe` at startup. The wrapper rebuilds it from
   its own `BOT_DEEP_LINK_BASE`; a different username there gives `422 return_url_not_allowed`, which the bot treats as an
   operator misconfiguration (generic user message, `wrapper_misconfigured` at ERROR).
-- **Active different tariff.** After a tariff is picked (and the account is linked) the bot checks, before the promo/quote
-  step, whether the account has an active tariff (`/me`: `paid_access_active`) that differs from the chosen one, and if so
-  shows "сейчас действует другой тариф до ..." with no quote or pay button. `/me` alone cannot decide it: the wrapper also
-  allows renewing the own plan and, under a successor mapping (`src/billing/terms.py`), buying the successor, and neither
-  `/me` nor the quote carries a mismatch flag (the 409 rule lives only in checkout). The bot does not re-implement the
-  rule; it asks the wrapper with read-only quotes (no promo, nothing created) and blocks only on positive evidence: the
-  quote for the chosen tariff is not redirected, **and** the quote for the tenant's own plan (what a renewal is sold as:
-  the plan or its successor) is not the chosen tariff. Any error or doubt falls through to the normal flow; the checkout
-  `409 active_tariff_mismatch` stays the authority and is mapped to the same message (state changed in between).
-  The common case (same tariff, lapsed or no tariff) makes no extra calls. Implemented in `handlers/tariffs.py`
-  (`blocked_by_active_tariff`); if the wrapper ever exposes a mismatch/successor field, replace it with that.
+- **Active different tariff.** The quote response carries the wrapper's own answer (wrapper `a36c9ac`):
+  `active_tariff_mismatch` (true exactly when checkout of the same `tariff_id` would be `409 active_tariff_mismatch`, computed by
+  the predicate checkout itself uses), plus `active_tariff_id` and `tariff_expires_at`. When the flag is true the bot shows
+  "сейчас действует другой тариф до ..." (date from the quote) and **no quote text or pay button**. No extra calls and nothing is
+  re-implemented in the bot (the own-plan renewal and the successor rule stay the wrapper's). The flag also comes back on
+  promo quotes, so the message appears after the promo step too (a promo attempt is counted by the wrapper as usual).
+  **Older wrapper without the field:** it reads as `false` (fail safe) and the normal flow runs; the checkout
+  `409 active_tariff_mismatch` stays the fallback, as it does for state that changes after the quote. Both give the same message.
 - The payment button is a URL button (`https` only) to `payment_url`, with a "Проверить оплату" button next to it.
 - `reused: true`: "the earlier payment link is still valid, no new payment is created". If the amount in the response differs
   from the quoted one, the message says so.

@@ -19,7 +19,7 @@ the referral programme**. It is a thin client of the `youtubegen-saas-wrapper` `
 | `/start` | Consent step first (links to the offer, referral terms = offer section 10, and bot data processing = privacy policy section 11). Nothing else works until the user presses "Согласен". |
 | `/start ref_<code>` | Same, and the referral code is sent to the wrapper (after consent; on every such `/start`, also for users who started organically earlier). The wrapper decides the outcome and the bot reports it. |
 | `/start paid` | Where the payment page returns the user: shows the real status/result of their latest payment (falls back to the account state only when there is none). |
-| `/tariffs` | The tariff list as the wrapper returns it. Choosing one requires a linked account (the link flow starts if there is none), then an optional promo code, a quote with the payable amount, and a payment button. A linked account that already has an active *different* tariff is told so right after the tariff is picked (before any quote or pay button); the wrapper stays the authority and its 409 is still handled. |
+| `/tariffs` | The tariff list as the wrapper returns it. Choosing one requires a linked account (the link flow starts if there is none), then an optional promo code, a quote with the payable amount, and a payment button. If the quote says checkout would be refused because the account has an active *different* tariff (`active_tariff_mismatch`, wrapper `a36c9ac`+), the user gets that message with no pay button; the checkout 409 is still handled as the fallback. |
 | payment | "Payment is being processed", background polling with backoff for up to 10 minutes, and a persistent "Проверить оплату" button (works after a restart). Result message: tariff + expiry, or cancelled/failed. |
 | `/referral` | Linked users only: personal link, counts, balances, rules from API fields, link to offer section 10, withdrawal request. Payout details are never asked for or stored; the operator contacts the user in Telegram. |
 | `/status` (`/me`) | Linked account (masked email) and tariff. |
@@ -36,7 +36,8 @@ Source of truth: the wrapper's `README.md` ("Telegram bot API", "Referral progra
 `GET /tariffs`, `POST /billing/quote`, `POST /billing/checkout`, `GET /billing/payments/latest`, `GET /billing/payments/{payment_id}`, `GET /referral`,
 `POST /referral/withdrawals`. Errors are `{"detail": {"error": <code>, ...}}`, with two exceptions the bot handles
 (see "Contract notes" in `documentation.md`): FastAPI's list-shaped 422 body-validation `detail`. Needs wrapper `1abbd66` or later
-(`GET /me` with the bot-user state, `GET /billing/payments/latest`, `tariff_not_found`).
+(`GET /me` with the bot-user state, `GET /billing/payments/latest`, `tariff_not_found`); `a36c9ac` adds the quote's `active_tariff_mismatch`
+(an older wrapper just lacks the early message: the field reads as false and the checkout 409 applies).
 
 The wrapper must have **both** `BOT_SERVICE_API_KEY` (equal to the bot's) **and** `BOT_DEEP_LINK_BASE`
 (`https://t.me/<bot username>`) set, or the bot cannot work: without the key every call is `503 bot_api_disabled`

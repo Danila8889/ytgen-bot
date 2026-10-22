@@ -9,7 +9,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from .. import callbacks, keyboards, schemas, texts
+from .. import callbacks, keyboards, texts
 from ..context import AppContext
 from ..ui import answer, fail, say
 from ..wrapper import WRAPPER_FAILURES
@@ -32,47 +32,10 @@ async def show_tariffs(ctx: AppContext, bot: Bot, uid: int) -> None:
     await say(ctx, bot, uid, texts.tariffs_list(items), keyboards.tariffs(items) if items else None)
 
 
-async def blocked_by_active_tariff(
-    ctx: AppContext, uid: int, tenant: schemas.MeTenant, tariff_id: int
-) -> bool:
-    """True only with positive evidence that checkout would answer 409 `active_tariff_mismatch`.
-
-    `GET /me` alone cannot decide: the wrapper lets a tenant buy its own plan again and, under a successor
-    mapping (`src/billing/terms.py`), the successor of its plan; the bot must not re-implement that rule, and
-    neither the quote nor `/me` carries a mismatch flag. So the wrapper is asked, with two read-only quotes
-    (no promo, nothing reserved, nothing created):
-
-    * `quote(wanted)` returns another tariff id -> the wrapper redirected the request (its own successor
-      mapping applies) -> allowed;
-    * otherwise `quote(<the tenant's own tariff>)` returns what the wrapper would sell for a renewal: the plan
-      itself, or its successor. If that is the wanted tariff, it is the successor -> allowed;
-    * only when the wanted tariff is neither the tenant's own, nor a redirect target, nor what a renewal is sold
-      as, is it a different plan -> blocked.
-
-    Fails open: any error, or no active different tariff in `/me`, returns False and the normal flow runs; the
-    wrapper's 409 stays the authority and is mapped as before.
-    """
-    if not tenant.paid_access_active or tenant.tariff_id is None or tenant.tariff_id == tariff_id:
-        return False
-    try:
-        wanted = await ctx.wrapper.quote(uid, tariff_id)
-        if wanted.tariff_id != tariff_id:
-            return False
-        renewal = await ctx.wrapper.quote(uid, tenant.tariff_id)
-    except WRAPPER_FAILURES:
-        log.warning("active_tariff_precheck_skipped", extra={"tg_user": uid, "tariff_id": tariff_id})
-        return False
-    return renewal.tariff_id != tariff_id
-
-
 async def choose_tariff(ctx: AppContext, bot: Bot, uid: int, tariff_id: int) -> None:
     """A tariff was picked: require a linked account, then offer the promo-code step."""
     me = await linked_me(ctx, bot, uid, prompt=texts.link_need_account(), after_tariff=tariff_id)
     if me is None:
-        return
-    if me.tenant is not None and await blocked_by_active_tariff(ctx, uid, me.tenant, tariff_id):
-        log.info("active_other_tariff", extra={"tg_user": uid, "tariff_id": tariff_id})
-        await say(ctx, bot, uid, texts.active_other_tariff(me.tenant.tariff_expires_at))
         return
     try:
         items = await ctx.wrapper.tariffs(uid)
@@ -101,6 +64,11 @@ async def do_quote(
                 kbs={"retry": keyboards.tariff_actions(tariff_id), "link": keyboards.link_prompt(tariff_id)},
             )
             return
+    if quote.active_tariff_mismatch:
+        # The wrapper says checkout of this tariff would be refused (an active different tariff): no pay button.
+        log.info("active_other_tariff", extra={"tg_user": uid, "tariff_id": tariff_id})
+        await say(ctx, bot, uid, texts.active_other_tariff(quote.tariff_expires_at))
+        return
     promo = promo_code if quote.promo is not None else None
     await say(
         ctx, bot, uid, texts.quote_text(quote),

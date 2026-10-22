@@ -46,6 +46,10 @@ none applied and why.
 - A new field/endpoint is read from the wrapper's real code (`src/api/routers/bot.py`, `src/bot/`) and README first. Add the
   response shape to `schemas.py`, a route to `tests/fake_wrapper.py` copied from the real shape, and a test. A mismatch with the
   stated contract goes into `documentation.md` section 7 and the task report; do not paper over it.
+- **Never re-implement a wrapper rule in the bot** (who may buy which tariff, successor mappings, limits). If the bot needs the answer, the
+  wrapper must return it: e.g. the quote's `active_tariff_mismatch` (+ `active_tariff_id`, `tariff_expires_at`) comes from the same predicate
+  as the checkout 409. A new wrapper field is optional in `schemas.py` with a fail-safe default so an older wrapper degrades to the
+  existing error path, never to a wrong action.
 - A new wrapper error code gets an entry in `errors_ru.py` (and `DOCUMENTED_CODES`) and a test. Unmapped codes log at ERROR on purpose.
 
 ## Handlers and callbacks

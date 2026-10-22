@@ -104,6 +104,12 @@ class QuoteResponse(_Model):
     price_rub: int  # the LIST price; the amount to charge is `payable_rub`
     period_days: int
     promo: PromoQuote | None = None
+    # Bot-only fields (wrapper a36c9ac): true exactly when checkout of this tariff would be refused with
+    # 409 `active_tariff_mismatch` (the wrapper's own predicate). A wrapper without the field reads as false
+    # (fail safe): the checkout 409 stays the fallback.
+    active_tariff_mismatch: bool = False
+    active_tariff_id: int | None = None
+    tariff_expires_at: dt.datetime | None = None
 
     @property
     def payable_rub(self) -> int:
