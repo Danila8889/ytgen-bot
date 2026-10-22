@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import callbacks, keyboards, texts
 from ..context import AppContext
 from ..ui import answer, fail, say
+from ..wrapper import WRAPPER_FAILURES
 from .filters import IsAction
 from .link import begin_link
 from .referral import show_referral
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 async def show_status(ctx: AppContext, bot: Bot, uid: int) -> None:
     try:
         me = await ctx.wrapper.me(uid)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         await fail(ctx, bot, uid, exc, "me")
         return
     if me.linked and me.tenant is not None:

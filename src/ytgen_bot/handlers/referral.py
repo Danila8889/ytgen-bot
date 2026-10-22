@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import callbacks, keyboards, schemas, texts
 from ..context import AppContext
 from ..ui import answer, fail, say
+from ..wrapper import WRAPPER_FAILURES
 from .filters import IsAction
 from .states import WithdrawStates
 
@@ -29,7 +30,7 @@ def _can_withdraw(info: schemas.ReferralInfo) -> bool:
 async def show_referral(ctx: AppContext, bot: Bot, uid: int) -> None:
     try:
         info = await ctx.wrapper.referral(uid)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         await fail(ctx, bot, uid, exc, "referral", kbs=_LINK_KBS)
         return
     if info.deep_link is None:
@@ -56,7 +57,7 @@ async def on_withdraw_button(
         return
     try:
         info = await ctx.wrapper.referral(uid)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         await fail(ctx, bot, uid, exc, "referral", kbs=_LINK_KBS)
         return
     if not _can_withdraw(info):
@@ -89,7 +90,7 @@ async def on_withdraw_confirm(
         await answer(callback)
         try:
             result = await ctx.wrapper.request_withdrawal(uid, amount)
-        except Exception as exc:
+        except WRAPPER_FAILURES as exc:
             view = await fail(ctx, bot, uid, exc, "withdrawal", kbs=_LINK_KBS)
             code = getattr(exc, "code", None)
             if code in ("withdrawal_below_minimum", "insufficient_balance"):

@@ -58,6 +58,8 @@ class FakeWrapper:
         self.tariffs = [tariff(11, "Старт", 1234), tariff(12, "Профи", 5678, period_days=7)]
         self.payments: dict[str, dict[str, Any]] = {}
         self.payment_seq = 0
+        # Successor mapping of the wrapper (src/billing/terms.py): {current tariff id: (successor id, E reached)}.
+        self.successors: dict[int, tuple[int, bool]] = {}
         self.latest: dict[int, str] = {}  # uid -> payment id of the most recent bot checkout
         self.code = "123456"
         self.referral_info: dict[str, Any] = {
@@ -233,12 +235,23 @@ class FakeWrapper:
     def _tariff(self, tid: int | None) -> dict[str, Any] | None:
         return next((t for t in self.tariffs if t["id"] == tid), None)
 
+    def _chosen(self, uid: int, requested: dict[str, Any]) -> dict[str, Any]:
+        """terms.choose_terms_tariff: with a successor mapping, a request for the current plan or its
+        successor is sold on the successor once E is reached, on the current plan before."""
+        current = self.linked[uid]["tariff_id"]
+        mapping = self.successors.get(current)
+        if mapping and requested["id"] in (current, mapping[0]):
+            return self._tariff(mapping[0] if mapping[1] else current)  # type: ignore[return-value]
+        return requested
+
     def r_quote(self, uid: int, body: dict[str, Any]) -> httpx.Response:
         if uid not in self.linked:
             return detail_error(403, "telegram_not_linked")
-        t = self._tariff(body.get("tariff_id"))
-        if t is None:
+        wanted = body.get("tariff_id") or self.linked[uid]["tariff_id"]
+        requested = self._tariff(wanted)
+        if requested is None:
             return detail_error(404, "tariff_not_found")
+        t = self._chosen(uid, requested)  # NOTE: the real quote does not apply the 409 rule (only checkout does)
         out: dict[str, Any] = {
             "tariff_id": t["id"], "plan_name": t["name"], "price_rub": t["price_rub"], "currency": "RUB",
             "period_days": t["period_days"], "period_start": NOW, "period_end": NOW, "limits": {},
@@ -256,9 +269,18 @@ class FakeWrapper:
     def r_checkout(self, uid: int, body: dict[str, Any]) -> httpx.Response:
         if uid not in self.linked:
             return detail_error(403, "telegram_not_linked")
-        t = self._tariff(body["tariff_id"])
-        if t is None:
+        requested = self._tariff(body["tariff_id"])
+        if requested is None:
             return detail_error(404, "tariff_not_found")
+        tenant = self.linked[uid]
+        current, expires = tenant["tariff_id"], tenant["tariff_expires_at"]
+        mapping = self.successors.get(current)
+        if (
+            current is not None and current != requested["id"] and expires and expires > NOW
+            and not (mapping and requested["id"] == mapping[0])
+        ):  # billing.decide_subscribe: 409 before anything is created
+            return detail_error(409, "active_tariff_mismatch", active_tariff_id=current, tariff_expires_at=expires)
+        t = self._chosen(uid, requested)
         amount = t["price_rub"]
         if body.get("promo_code") == "SAVE10XX":
             amount -= amount * 10 // 100

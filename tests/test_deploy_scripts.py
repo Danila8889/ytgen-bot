@@ -18,7 +18,7 @@ def render(tmp_path: pathlib.Path, env: dict[str, str], production: str) -> subp
     (tmp_path / ".env.production").write_text(production)
     return subprocess.run(
         ["bash", "scripts/render_env.sh"], cwd=tmp_path, env={"PATH": "/usr/bin:/bin", **env},
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
 
 
@@ -119,6 +119,7 @@ def test_workflow_deploys_only_on_dispatch_and_uses_the_rollback_pattern():
     assert "python-version" not in setup["with"] and setup["with"]["activate-environment"] is False
     assert test["env"]["UV_PROJECT_ENVIRONMENT"].endswith("/.ci-test-src/.venv")
     assert test["env"]["UV_PYTHON"] == "3.12"
+    assert any(step.get("run") == "uv run ruff check" for step in test["steps"])
     assert "always() && !cancelled() && (steps.deploy.outcome == 'failure' || steps.healthcheck.outcome == 'failure')" in text
     assert set(deploy["env"]) == {"BOT_TOKEN", "BOT_SERVICE_API_KEY"}
     assert wf[True]["push"]["branches"] == ["main"]  # `on:` parses as the boolean key True

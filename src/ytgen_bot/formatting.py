@@ -19,8 +19,8 @@ def rub(amount: int) -> str:
 
 def when(value: dt.datetime) -> str:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        value = value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC).strftime("%d.%m.%Y %H:%M UTC")
 
 
 def wait(seconds: int) -> str:

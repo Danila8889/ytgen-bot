@@ -66,6 +66,12 @@ none applied and why.
 New behaviour needs tests for: its error mappings, the consent gate where relevant, double-tap where it changes state,
 and log masking where it logs user data.
 
+## Lint
+
+`uv run ruff check` (ruff pinned in `uv.lock`, default rule set) must be clean; the CI `test` job runs it before the tests.
+Handlers catch `WRAPPER_FAILURES` (the three wrapper failure types), never a blind `Exception`; anything else is a bug and goes to the
+dispatcher's error handler (ERROR log + generic message).
+
 ## Known technical landmines
 
 - **Docker -> wrapper URL.** `127.0.0.1:8090` is the container's own loopback; `host.docker.internal` cannot reach a

@@ -6,7 +6,11 @@ import pytest
 
 from tests.fake_wrapper import SERVICE_KEY, FakeWrapper
 from ytgen_bot.wrapper import (
-    WrapperClient, WrapperContractError, WrapperError, WrapperUnavailable, parse_error,
+    WrapperClient,
+    WrapperContractError,
+    WrapperError,
+    WrapperUnavailable,
+    parse_error,
 )
 
 UID = 777

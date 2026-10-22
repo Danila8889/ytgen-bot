@@ -50,6 +50,11 @@ class WrapperContractError(Exception):
     """A 2xx answer that does not have the documented shape."""
 
 
+# Every way a wrapper call can fail; handlers catch exactly these and show a mapped message. Anything else is
+# a bug and goes to the dispatcher's error handler (ERROR log + generic message).
+WRAPPER_FAILURES = (WrapperError, WrapperUnavailable, WrapperContractError)
+
+
 def _retry_after(response: httpx.Response, detail: dict[str, Any]) -> int | None:
     value: Any = detail.get("retry_after_s")
     if value is None:
@@ -180,11 +185,12 @@ class WrapperClient:
 
     async def tariffs(self, uid: int) -> list[schemas.Tariff]:
         payload = await self._send("GET", "/tariffs", uid)
+        if not isinstance(payload, list):
+            log.error("wrapper_contract_mismatch", extra={"method": "GET", "path": "/tariffs", "tg_user": uid})
+            raise WrapperContractError("GET /tariffs: a list was expected")
         try:
-            if not isinstance(payload, list):
-                raise ValueError("tariff list expected")
             return [schemas.Tariff.model_validate(item) for item in payload]
-        except (ValueError, ValidationError) as exc:
+        except ValidationError as exc:
             log.error("wrapper_contract_mismatch", extra={"method": "GET", "path": "/tariffs", "tg_user": uid})
             raise WrapperContractError("GET /tariffs: unexpected response shape") from exc
 

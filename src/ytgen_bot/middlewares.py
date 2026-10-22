@@ -16,6 +16,7 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 from . import keyboards, texts
 from .context import AppContext
 from .ui import answer, fail, mark_blocked, say
+from .wrapper import WRAPPER_FAILURES
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class ConsentMiddleware(BaseMiddleware):
             # Consent is read from the wrapper (GET /me: read-only, no row, no event), never remembered here,
             # so it survives a restart and an opt-out takes effect at once.
             consented = (await self._ctx.wrapper.me(uid)).consented
-        except Exception as exc:
+        except WRAPPER_FAILURES as exc:
             if isinstance(event, CallbackQuery):
                 await answer(event)
             await fail(self._ctx, bot, uid, exc, "generic")

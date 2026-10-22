@@ -19,7 +19,7 @@ class AppContext:
     bot_username: str
     limiter: TokenBucket = dataclasses.field(default_factory=TokenBucket)
     guard: ActionGuard = dataclasses.field(default_factory=ActionGuard)
-    watchers: "PaymentWatchers | None" = None
+    watchers: PaymentWatchers | None = None
 
     @property
     def support(self) -> str:

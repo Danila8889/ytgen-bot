@@ -10,7 +10,11 @@ from aiogram import Bot, Dispatcher
 
 from tests.fake_wrapper import SERVICE_KEY, FakeWrapper
 from tests.mocked_telegram import (
-    BOT_TOKEN, BOT_USERNAME, MockedSession, callback_update, message_update,
+    BOT_TOKEN,
+    BOT_USERNAME,
+    MockedSession,
+    callback_update,
+    message_update,
 )
 from ytgen_bot.app import build_dispatcher
 from ytgen_bot.config import Settings

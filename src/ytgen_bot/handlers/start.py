@@ -15,6 +15,7 @@ from .. import callbacks, keyboards, schemas, texts
 from ..context import AppContext
 from ..startparam import parse_start_param
 from ..ui import answer, fail, say
+from ..wrapper import WRAPPER_FAILURES
 from .filters import IsAction
 from .payment import show_paid_return
 
@@ -54,7 +55,7 @@ async def cmd_start(
         result: schemas.StartResponse | None = None
         if me.consented:
             result = await ctx.wrapper.start(uid, language=language, referral_code=param.ref_code)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         await fail(ctx, bot, uid, exc, "generic")
         return
 
@@ -90,7 +91,7 @@ async def on_consent(
             result = await ctx.wrapper.start(
                 uid, language=callback.from_user.language_code, consent=True, referral_code=ref_code
             )
-        except Exception as exc:
+        except WRAPPER_FAILURES as exc:
             await fail(ctx, bot, uid, exc, "generic")
             return
         if not result.consented:
@@ -106,7 +107,7 @@ async def cmd_stop(message: Message, bot: Bot, ctx: AppContext, state: FSMContex
     uid = message.from_user.id
     try:
         await ctx.wrapper.opt_out(uid)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         # No fake success: the opt-out is not recorded until the wrapper says so.
         await fail(ctx, bot, uid, exc, "generic")
         return

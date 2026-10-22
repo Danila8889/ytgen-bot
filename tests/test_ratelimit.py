@@ -115,11 +115,12 @@ async def test_overlong_input_is_rejected_early(linked: Harness):
 
 async def test_non_text_message_gets_a_hint_not_a_crash(linked: Harness):
     import datetime as dt
+
     from aiogram.types import Chat, Message, Update, User
 
     h = linked
     update = Update(update_id=99, message=Message(
-        message_id=1, date=dt.datetime.now(dt.timezone.utc), chat=Chat(id=UID, type="private"),
+        message_id=1, date=dt.datetime.now(dt.UTC), chat=Chat(id=UID, type="private"),
         from_user=User(id=UID, is_bot=False, first_name="T"),
     ))
     await h.dp.feed_update(h.bot, update)

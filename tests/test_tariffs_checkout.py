@@ -6,7 +6,7 @@ import asyncio
 import httpx
 import pytest
 
-from tests.conftest import Harness
+from tests.conftest import UID, Harness
 from tests.fake_wrapper import tariff
 from tests.mocked_telegram import BOT_USERNAME, buttons
 from ytgen_bot import callbacks, texts
@@ -254,3 +254,91 @@ async def test_wrapper_unreachable_on_checkout_creates_no_watcher(linked: Harnes
     await h.press(callbacks.pay(11, 1234))
     assert h.last == texts.SERVICE_UNAVAILABLE
     assert not h.ctx.watchers._tasks
+
+
+# --- an active DIFFERENT tariff is reported before the quote -----------------------------------------
+
+ACTIVE = {"tariff_id": 12, "tariff_name": "Профи", "tariff_expires_at": "2026-11-21T10:00:00Z"}
+
+
+def quotes(h: Harness) -> list[dict]:
+    return [c["json"] for c in h.fake.calls("POST", "/billing/quote")]
+
+
+async def test_active_different_tariff_is_told_before_the_quote_and_pay_button(linked: Harness):
+    h = linked
+    h.fake.linked[UID].update(ACTIVE)
+    await h.press(callbacks.tariff(11))
+    assert "другой тариф" in h.last and "21.11.2026" in h.last
+    assert buttons(h.session.last_markup()) == []  # no promo / quote / pay buttons
+    assert not h.fake.calls("POST", "/billing/checkout")
+    assert all("promo_code" not in q for q in quotes(h))  # only the read-only oracle quotes were made
+
+
+async def test_renewal_of_the_tenants_own_tariff_is_still_allowed(linked: Harness):
+    h = linked
+    h.fake.linked[UID].update(ACTIVE)
+    await h.press(callbacks.tariff(12))
+    assert [b.callback_data for b in buttons(h.session.last_markup())] == [callbacks.promo(12), callbacks.quote(12)]
+    assert quotes(h) == []  # no extra wrapper calls for the common case
+    await h.press(callbacks.quote(12))
+    await h.press(buttons(h.session.last_markup())[0].callback_data)
+    assert h.fake.calls("POST", "/billing/checkout")
+
+
+async def test_the_wrappers_successor_rule_is_honoured_before_E(linked: Harness):
+    """Tenant on 11 with 11 -> 12 mapped, E not reached: buying 12 is redirected by the wrapper -> allowed."""
+    h = linked
+    h.fake.linked[UID].update(tariff_id=11, tariff_name="Старт", tariff_expires_at="2026-11-21T10:00:00Z")
+    h.fake.successors[11] = (12, False)
+    await h.press(callbacks.tariff(12))
+    assert [b.callback_data for b in buttons(h.session.last_markup())] == [callbacks.promo(12), callbacks.quote(12)]
+    await h.press(callbacks.pay(12, 5678))
+    assert h.fake.calls("POST", "/billing/checkout")  # the wrapper accepts it too
+
+
+async def test_the_wrappers_successor_rule_is_honoured_after_E(linked: Harness):
+    h = linked
+    h.fake.linked[UID].update(tariff_id=11, tariff_name="Старт", tariff_expires_at="2026-11-21T10:00:00Z")
+    h.fake.successors[11] = (12, True)
+    await h.press(callbacks.tariff(12))
+    assert [b.callback_data for b in buttons(h.session.last_markup())] == [callbacks.promo(12), callbacks.quote(12)]
+
+
+async def test_a_third_tariff_is_still_blocked_under_a_successor_mapping(linked: Harness):
+    h = linked
+    h.fake.tariffs.append(tariff(13, "Третий", 999))
+    h.fake.linked[UID].update(tariff_id=11, tariff_name="Старт", tariff_expires_at="2026-11-21T10:00:00Z")
+    h.fake.successors[11] = (12, True)
+    await h.press(callbacks.tariff(13))
+    assert "другой тариф" in h.last
+
+
+async def test_lapsed_or_missing_tariff_may_choose_anything(linked: Harness):
+    h = linked
+    h.fake.linked[UID].update(tariff_id=12, tariff_name="Профи", tariff_expires_at="2026-09-01T10:00:00Z")
+    await h.press(callbacks.tariff(11))
+    assert buttons(h.session.last_markup())[0].callback_data == callbacks.promo(11)
+    h.fake.linked[UID].update(tariff_id=None, tariff_name=None, tariff_expires_at=None)
+    await h.press(callbacks.tariff(11))
+    assert buttons(h.session.last_markup())[0].callback_data == callbacks.promo(11)
+    assert quotes(h) == []
+
+
+async def test_precheck_fails_open_and_the_409_is_the_fallback(linked: Harness):
+    """If the pre-check cannot decide (wrapper error), the normal flow runs and the wrapper's 409 still lands."""
+    h = linked
+    h.fake.linked[UID].update(ACTIVE)
+    h.fake.queue("POST", "/billing/quote", httpx.ConnectError("down"))
+    await h.press(callbacks.tariff(11))
+    assert buttons(h.session.last_markup())[0].callback_data == callbacks.promo(11)
+    await h.press(callbacks.pay(11, 1234))  # the 409 from checkout
+    assert "другой тариф" in h.last and "21.11.2026" in h.last
+
+
+async def test_state_changed_after_the_screen_the_409_is_the_fallback(linked: Harness):
+    h = linked
+    await h.press(callbacks.tariff(11))  # free to buy at this moment
+    h.fake.linked[UID].update(ACTIVE)  # ...then a payment elsewhere activates another tariff
+    await h.press(callbacks.pay(11, 1234))
+    assert "другой тариф" in h.last and not h.fake.payments

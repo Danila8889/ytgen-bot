@@ -5,6 +5,8 @@ passed in as an argument (tests/test_no_constants.py enforces it).
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from . import schemas
 from .formatting import esc, rub, wait, when
 
@@ -198,6 +200,14 @@ def tariff_chosen(tariff: schemas.Tariff) -> str:
     )
 
 
+def active_other_tariff(expires_at: dt.datetime | None) -> str:
+    until = f" до {when(expires_at)}" if expires_at is not None else ""
+    return (
+        f"Сейчас у вас действует другой тариф{until}. "
+        "Оформить другой тариф через бота можно после окончания срока действия текущего."
+    )
+
+
 def promo_ask() -> str:
     return "Введите промокод одним сообщением. Отмена: /start"
 
@@ -313,16 +323,20 @@ def referral_screen(info: schemas.ReferralInfo, support_contact: str) -> str:
         lines.append(f"К удержанию из будущих начислений: {rub(b.owed_rub)}")
     lines += [
         "",
-        f"Вознаграждение: {info.reward_percent}%. Удержание: {info.hold_days} дн. "
-        f"Минимальный вывод: {rub(info.min_withdrawal_rub)}.",
+        (
+            f"Вознаграждение: {info.reward_percent}%. Удержание: {info.hold_days} дн. "
+            f"Минимальный вывод: {rub(info.min_withdrawal_rub)}."
+        ),
         f'Полные условия: <a href="{OFFER_REFERRAL_URL}">раздел 10 оферты</a>.',
     ]
     if info.open_withdrawal is not None:
         ow = info.open_withdrawal
         lines += [
             "",
-            f"Заявка на вывод №{ow.id}: {rub(ow.amount_rub)} от {when(ow.created_at)}. "
-            f"Вопросы по заявке: {esc(support_contact)}",
+            (
+                f"Заявка на вывод №{ow.id}: {rub(ow.amount_rub)} от {when(ow.created_at)}. "
+                f"Вопросы по заявке: {esc(support_contact)}"
+            ),
         ]
     return "\n".join(lines)
 

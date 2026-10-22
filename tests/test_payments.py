@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 
 from tests.conftest import UID, Harness
 from ytgen_bot import callbacks, texts
@@ -11,7 +12,7 @@ from ytgen_bot.payments import MAX_CONSECUTIVE_FAILURES, WATCH_TOTAL_S, backoff_
 def test_backoff_is_finite_capped_and_bounded():
     delays = list(backoff_delays())
     assert delays[0] == 3.0
-    assert all(b >= a for a, b in zip(delays[:-1], delays[1:-1], strict=False))  # growing; only the last step is trimmed
+    assert all(b >= a for a, b in itertools.pairwise(delays[:-1]))  # growing; only the last step is trimmed
     assert max(delays) <= 30.0
     assert abs(sum(delays) - WATCH_TOTAL_S) < 1e-6
     assert len(delays) < 40

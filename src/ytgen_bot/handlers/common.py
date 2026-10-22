@@ -6,6 +6,7 @@ from aiogram import Bot
 from .. import keyboards, schemas
 from ..context import AppContext
 from ..ui import fail, say
+from ..wrapper import WRAPPER_FAILURES
 
 
 async def linked_me(
@@ -14,7 +15,7 @@ async def linked_me(
     """The caller's /me when an account is linked; otherwise the link prompt is shown and None returned."""
     try:
         me = await ctx.wrapper.me(uid)
-    except Exception as exc:
+    except WRAPPER_FAILURES as exc:
         await fail(ctx, bot, uid, exc, "me")
         return None
     if not me.linked or me.tenant is None:

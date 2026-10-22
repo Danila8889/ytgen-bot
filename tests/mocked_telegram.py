@@ -7,7 +7,14 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, DeleteWebhook, GetMe, SendMessage, SetMyCommands, TelegramMethod
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteWebhook,
+    GetMe,
+    SendMessage,
+    SetMyCommands,
+    TelegramMethod,
+)
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
 BOT_ID = 4242
@@ -33,7 +40,7 @@ class MockedSession(BaseSession):
             if self.errors:
                 raise self.errors.popleft()
             return Message(
-                message_id=len(self.requests), date=dt.datetime.now(dt.timezone.utc),
+                message_id=len(self.requests), date=dt.datetime.now(dt.UTC),
                 chat=Chat(id=int(method.chat_id), type="private"), text=method.text,
             )
         if isinstance(method, GetMe):
@@ -71,7 +78,7 @@ def message_update(uid: int, text: str, update_id: int = 1, *, chat_type: str = 
     return Update(
         update_id=update_id,
         message=Message(
-            message_id=update_id, date=dt.datetime.now(dt.timezone.utc),
+            message_id=update_id, date=dt.datetime.now(dt.UTC),
             chat=Chat(id=uid, type=chat_type),
             from_user=User(id=uid, is_bot=False, first_name="T", language_code=language),
             text=text,
@@ -86,7 +93,7 @@ def callback_update(uid: int, data: str, update_id: int = 1) -> Update:
         callback_query=CallbackQuery(
             id=str(update_id), from_user=user, chat_instance="ci", data=data,
             message=Message(
-                message_id=1, date=dt.datetime.now(dt.timezone.utc), chat=Chat(id=uid, type="private"),
+                message_id=1, date=dt.datetime.now(dt.UTC), chat=Chat(id=uid, type="private"),
                 from_user=User(id=BOT_ID, is_bot=True, first_name="YT"), text="x",
             ),
         ),

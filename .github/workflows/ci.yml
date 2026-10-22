@@ -48,6 +48,10 @@ jobs:
         working-directory: .ci-test-src
         run: uv sync --frozen
 
+      - name: Lint (ruff, version pinned in uv.lock, default rule set)
+        working-directory: .ci-test-src
+        run: uv run ruff check
+
       - name: Run tests
         working-directory: .ci-test-src
         run: uv run pytest -q

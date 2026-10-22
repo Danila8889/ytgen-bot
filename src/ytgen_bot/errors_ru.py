@@ -12,7 +12,7 @@ import datetime as dt
 import logging
 
 from . import texts
-from .formatting import esc, rub, wait, when
+from .formatting import esc, rub, wait
 from .wrapper import WrapperContractError, WrapperError, WrapperUnavailable
 
 log = logging.getLogger(__name__)
@@ -152,18 +152,15 @@ _PROMO = {
 
 
 def _tariff_mismatch(err: WrapperError, support: str) -> ErrorView:
+    """The wrapper's 409 (the fallback when the pre-check in handlers/tariffs.py did not catch it)."""
     expires = err.detail.get("tariff_expires_at")
-    until = ""
+    parsed: dt.datetime | None = None
     if isinstance(expires, str):
         try:
-            until = f" до {when(dt.datetime.fromisoformat(expires))}"
+            parsed = dt.datetime.fromisoformat(expires)
         except ValueError:
-            until = ""
-    return ErrorView(
-        f"Сейчас у вас действует другой тариф{until}. "
-        "Оформить другой тариф через бота можно после окончания срока действия текущего.",
-        next="none",
-    )
+            parsed = None
+    return ErrorView(texts.active_other_tariff(parsed), next="none")
 
 
 _ORDER = {

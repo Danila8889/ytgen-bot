@@ -13,6 +13,7 @@ from .. import callbacks, keyboards, texts
 from ..context import AppContext
 from ..masking import mask_code, mask_email
 from ..ui import answer, fail, say
+from ..wrapper import WRAPPER_FAILURES
 from .filters import IsAction
 from .states import LinkStates
 from .tariffs import choose_tariff
@@ -54,7 +55,7 @@ async def on_email(message: Message, bot: Bot, ctx: AppContext, state: FSMContex
             return
         try:
             result = await ctx.wrapper.request_code(uid, email)
-        except Exception as exc:
+        except WRAPPER_FAILURES as exc:
             view = await fail(ctx, bot, uid, exc, "link_request")
             if view.next == "none":
                 await state.clear()
@@ -82,7 +83,7 @@ async def on_code(message: Message, bot: Bot, ctx: AppContext, state: FSMContext
             return
         try:
             result = await ctx.wrapper.verify_code(uid, code)
-        except Exception as exc:
+        except WRAPPER_FAILURES as exc:
             log.info("link_code_rejected", extra={"tg_user": uid, "code": mask_code(code)})
             view = await fail(
                 ctx, bot, uid, exc, "link_verify", kbs={"restart": keyboards.link_retry(after_tariff)}
