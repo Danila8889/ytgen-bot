@@ -6,7 +6,12 @@ import pathlib
 import re
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ytgen_bot"
-USER_FACING = [SRC / "texts.py", SRC / "keyboards.py", SRC / "errors_ru.py", *sorted((SRC / "handlers").glob("*.py"))]
+USER_FACING = [
+    SRC / "texts.py", SRC / "keyboards.py", SRC / "errors_ru.py", *sorted((SRC / "handlers").glob("*.py")),
+    # the funnel's text and rendering modules: tariff figures are rendered from the wrapper, static facts live in the KB file
+    SRC / "funnel" / "texts.py", SRC / "funnel" / "keyboards.py", SRC / "funnel" / "render.py",
+    SRC / "funnel" / "handoff.py", SRC / "ai" / "prompt.py",
+]
 # Structural numbers only: indexes, "a day is 24 h", "a minute is 60 s", the email length, HTTP >= 500.
 ALLOWED_NUMBERS = {0, 1, 2, 24, 60, 254, 500}
 MONEY_OR_PERCENT = re.compile(r"\d\s*(₽|руб|RUB|%|рубл)", re.IGNORECASE)

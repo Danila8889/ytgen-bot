@@ -7,8 +7,11 @@ from ytgen_bot import callbacks as cb
 
 
 def test_round_trips():
-    assert cb.parse(cb.consent()) == cb.Action("consent", (None,))
-    assert cb.parse(cb.consent("ABC_def-1")) == cb.Action("consent", ("ABC_def-1",))
+    assert cb.parse(cb.consent()) == cb.Action("consent", (None, None))
+    assert cb.parse(cb.consent("ABC_def-1")) == cb.Action("consent", ("ABC_def-1", None))
+    assert cb.parse(cb.consent(source="yt")) == cb.Action("consent", (None, "yt"))
+    assert cb.parse(cb.funnel("go_pay")) == cb.Action("funnel", ("go_pay",))
+    assert cb.parse(cb.reminders("no")) == cb.Action("reminders", ("no",))
     assert cb.parse(cb.tariff(7)) == cb.Action("tariff", ("7",))
     assert cb.parse(cb.pay(7, 1234)) == cb.Action("pay", ("7", "1234", None))
     assert cb.parse(cb.pay(7, 1234, "SAVE-10_X")) == cb.Action("pay", ("7", "1234", "SAVE-10_X"))
@@ -16,6 +19,13 @@ def test_round_trips():
     assert cb.parse(cb.withdraw_ok(500)) == cb.Action("withdraw_ok", ("500",))
     for target in cb.MENU_TARGETS:
         assert cb.parse(cb.menu(target)).kind == "menu"
+
+
+def test_every_funnel_code_round_trips_and_fits():
+    for code in cb.FUNNEL_CODES:
+        data = cb.funnel(code)
+        assert cb.parse(data) == cb.Action("funnel", (code,))
+        assert len(data.encode()) <= 64
 
 
 def test_worst_case_fits_in_64_bytes():
@@ -30,6 +40,7 @@ def test_worst_case_fits_in_64_bytes():
         None, "", "x", "t:", "t:abc", "t:-1", "t:1234567890", "t:1 ", "pay:1", "pay:1:2:lower", "pay:1:2:" + "A" * 33,
         "chk:", "chk:a b", "chk:" + "a" * 61, "cn:" + "a" * 61, "cn:bad code", "m:admin", "wd:drop", "wdok:x",
         "t:1;DROP", "t:1\n", "x" * 65, "pay:1:2:A:B",
+        "cn.other", "cn.yt:ABC", "cn:ABC.yt", "f:", "f:nonsense", "f:go_pay ", "f:GO_PAY", "rm:maybe", "rm:",
     ],
 )
 def test_forged_or_malformed_data_is_rejected(data):

@@ -19,12 +19,16 @@ from tests.mocked_telegram import (
     message_update,
 )
 from tests.pg import ephemeral_postgres
+from ytgen_bot.ai.layer import AiResult
 from ytgen_bot.app import build_dispatcher
 from ytgen_bot.config import Settings
 from ytgen_bot.context import AppContext
 from ytgen_bot.db.engine import make_engine
 from ytgen_bot.db.migrate import upgrade_to_head
 from ytgen_bot.db.store import PgStore
+from ytgen_bot.funnel.flow import Funnel
+from ytgen_bot.funnel.tariffs import TariffProvider
+from ytgen_bot.knowledge import load as load_knowledge
 from ytgen_bot.payments import PaymentWatchers
 from ytgen_bot.wrapper import WrapperClient
 
@@ -50,6 +54,25 @@ def _no_real_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     assert not attempts, f"real network connections were attempted: {attempts}"
 
 
+class ScriptedAi:
+    """Stands in for the AI layer in funnel tests: queued results, every call recorded. (The real layer, validator and
+    client have their own tests with recorded provider replies.)"""
+
+    def __init__(self) -> None:
+        self.queue: list[AiResult] = []
+        self.calls: list[tuple[int, str, str]] = []
+
+    def say(self, reply: str, **kw: object) -> None:
+        self.queue.append(AiResult("answer", reply=reply, **kw))  # type: ignore[arg-type]
+
+    def fail(self, status: str = "failed") -> None:
+        self.queue.append(AiResult(status))
+
+    async def ask(self, uid: int, question: str, step: str) -> AiResult:
+        self.calls.append((uid, question, step))
+        return self.queue.pop(0) if self.queue else AiResult("answer", reply="Ответ AI.")
+
+
 @dataclass
 class Harness:
     fake: FakeWrapper
@@ -57,15 +80,18 @@ class Harness:
     bot: Bot
     dp: Dispatcher
     session: MockedSession
+    store: PgStore
+    clock: FakeClock
+    ai: ScriptedAi
     counter: int = 0
 
     async def say(self, text: str, uid: int = UID, **kw: object) -> None:
         self.counter += 1
         await self.dp.feed_update(self.bot, message_update(uid, text, self.counter, **kw))  # type: ignore[arg-type]
 
-    async def press(self, data: str, uid: int = UID) -> None:
+    async def press(self, data: str, uid: int = UID, **kw: object) -> None:
         self.counter += 1
-        await self.dp.feed_update(self.bot, callback_update(uid, data, self.counter))
+        await self.dp.feed_update(self.bot, callback_update(uid, data, self.counter, **kw))  # type: ignore[arg-type]
 
     @property
     def texts(self) -> list[str]:
@@ -128,16 +154,21 @@ async def store(pg_url: object, clock: FakeClock) -> AsyncIterator[PgStore]:
 
 
 @pytest.fixture
-async def h() -> AsyncIterator[Harness]:
+async def h(store: PgStore, clock: FakeClock) -> AsyncIterator[Harness]:
     fake = FakeWrapper()
     wrapper = WrapperClient("https://wrapper.example.test", SERVICE_KEY, transport=fake.transport())
     session = MockedSession()
     bot = Bot(BOT_TOKEN, session=session)
-    ctx = AppContext(settings=make_settings(), wrapper=wrapper, bot_username=BOT_USERNAME)
+    ai = ScriptedAi()
+    funnel = Funnel(
+        store=store, wrapper=wrapper, tariffs=TariffProvider(wrapper.public_tariffs, 300.0),
+        kb=load_knowledge(SUPPORT), ai=ai, support=SUPPORT, manager_chat_id=MANAGER, clock=clock,
+    )
+    ctx = AppContext(settings=make_settings(), wrapper=wrapper, bot_username=BOT_USERNAME, funnel=funnel)
     instant = _instant_sleep()
     watchers_ref = ctx.watchers = PaymentWatchers(ctx, bot, sleep=instant, delays=lambda: iter([1.0, 1.0, 1.0]))
     dp = build_dispatcher(ctx)
-    harness = Harness(fake, ctx, bot, dp, session)
+    harness = Harness(fake, ctx, bot, dp, session, store, clock, ai)
     yield harness
     watchers = ctx.watchers or watchers_ref
     await watchers.shutdown()

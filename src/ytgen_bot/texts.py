@@ -13,7 +13,8 @@ from .formatting import esc, rub, wait, when
 SITE_URL = "https://ytgenerator.ru"
 OFFER_URL = "https://ytgenerator.ru/legal/oferta"
 OFFER_REFERRAL_URL = "https://ytgenerator.ru/legal/oferta#section-10"
-PRIVACY_BOT_URL = "https://ytgenerator.ru/legal/privacy#section-11"
+PRIVACY_URL = "https://ytgenerator.ru/legal/privacy"
+PRIVACY_BOT_URL = f"{PRIVACY_URL}#section-11"
 
 PRODUCT_NOTE = "Сам сервис в Telegram не используется: он работает на сайте ytgenerator.ru."
 
@@ -33,16 +34,29 @@ def too_fast(seconds: int) -> str:
     return TOO_FAST.format(wait=wait(seconds))
 
 
+def _clause(number: str, label: str) -> str:
+    return f'<a href="{PRIVACY_URL}#clause-11-{number}">{label}</a>'
+
+
 def consent_request() -> str:
     return (
         "<b>Перед началом</b>\n"
-        "Этот бот нужен для оплаты тарифа YouTubeGen и реферальной программы. "
+        "Этот бот нужен для оплаты тарифа YouTubeGen, реферальной программы и подбора тарифа под вашу задачу "
+        "(короткие вопросы, ответы на свободные вопросы, передача менеджеру). "
         f"{PRODUCT_NOTE}\n\n"
         "Пожалуйста, ознакомьтесь:\n"
         f'• <a href="{OFFER_REFERRAL_URL}">условия реферальной программы</a> (раздел 10 оферты);\n'
         f'• <a href="{OFFER_URL}">оферта</a>;\n'
         f'• <a href="{PRIVACY_BOT_URL}">обработка данных в боте</a> '
-        "(политика конфиденциальности, раздел 11).\n\n"
+        "(политика конфиденциальности, раздел 11), в частности:\n"
+        f"– {_clause('9', 'кто вы и откуда пришли')} (п. 11.9);\n"
+        f"– {_clause('10', 'ваши ответы и свободный текст')} (п. 11.10);\n"
+        f"– {_clause('11', 'возражения, подобранный тариф, время действий')} (п. 11.11);\n"
+        f"– {_clause('12', 'цели обработки')} (п. 11.12);\n"
+        f"– {_clause('13', 'передача менеджеру')} (п. 11.13);\n"
+        f"– {_clause('14', 'напоминания')} (п. 11.14);\n"
+        f"– {_clause('15', 'AI-ассистент (kie.ai) и журнал его ответов')} (п. 11.15);\n"
+        f"– {_clause('16', 'удаление по команде /stop и срок хранения')} (п. 11.16).\n\n"
         "Нажимая «Согласен», вы подтверждаете, что ознакомились с этими документами. "
         "Отказаться можно в любой момент командой /stop."
     )
@@ -64,7 +78,7 @@ def help_text(support_contact: str) -> str:
         "/tariffs — тарифы и оплата\n"
         "/referral — реферальная программа\n"
         "/status — аккаунт и тариф\n"
-        "/stop — отказаться от сообщений бота\n"
+        "/stop — отказаться от сообщений бота и удалить ваши ответы подбора\n"
         "/help — эта справка\n\n"
         f"Поддержка: {esc(support_contact)}\n"
         f'<a href="{OFFER_URL}">Оферта</a> · '
@@ -74,6 +88,13 @@ def help_text(support_contact: str) -> str:
 
 def stopped() -> str:
     return "Готово: вы отказались от сообщений бота. Чтобы вернуться, отправьте /start."
+
+
+def stop_purge_failed(support_contact: str) -> str:
+    return (
+        "Но удалить ваши ответы из подбора тарифа сейчас не удалось. Напишите в поддержку, мы удалим их вручную: "
+        f"{esc(support_contact)}."
+    )
 
 
 def referral_outcome(outcome: str) -> str | None:

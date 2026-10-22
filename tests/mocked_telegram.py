@@ -74,20 +74,25 @@ def buttons(markup: Any) -> list[Any]:
     return [b for row in (markup.inline_keyboard if markup else []) for b in row]
 
 
-def message_update(uid: int, text: str, update_id: int = 1, *, chat_type: str = "private", language: str = "ru") -> Update:
+def message_update(
+    uid: int, text: str, update_id: int = 1, *, chat_type: str = "private", language: str = "ru",
+    username: str | None = None, first_name: str = "T", chat_id: int | None = None,
+) -> Update:
     return Update(
         update_id=update_id,
         message=Message(
             message_id=update_id, date=dt.datetime.now(dt.UTC),
-            chat=Chat(id=uid, type=chat_type),
-            from_user=User(id=uid, is_bot=False, first_name="T", language_code=language),
+            chat=Chat(id=uid if chat_id is None else chat_id, type=chat_type),
+            from_user=User(id=uid, is_bot=False, first_name=first_name, language_code=language, username=username),
             text=text,
         ),
     )
 
 
-def callback_update(uid: int, data: str, update_id: int = 1) -> Update:
-    user = User(id=uid, is_bot=False, first_name="T", language_code="ru")
+def callback_update(
+    uid: int, data: str, update_id: int = 1, *, username: str | None = None, first_name: str = "T"
+) -> Update:
+    user = User(id=uid, is_bot=False, first_name=first_name, language_code="ru", username=username)
     return Update(
         update_id=update_id,
         callback_query=CallbackQuery(

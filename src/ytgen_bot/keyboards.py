@@ -15,8 +15,8 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
-def consent(ref_code: str | None = None) -> InlineKeyboardMarkup:
-    return _kb([_btn("Согласен", callbacks.consent(ref_code))])
+def consent(ref_code: str | None = None, source: str | None = None) -> InlineKeyboardMarkup:
+    return _kb([_btn("Согласен", callbacks.consent(ref_code, source))])
 
 
 def main_menu() -> InlineKeyboardMarkup:

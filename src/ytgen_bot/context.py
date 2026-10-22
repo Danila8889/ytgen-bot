@@ -9,6 +9,7 @@ from .ratelimit import ActionGuard, TokenBucket
 from .wrapper import WrapperClient
 
 if TYPE_CHECKING:  # pragma: no cover
+    from .funnel.flow import Funnel
     from .payments import PaymentWatchers
 
 
@@ -17,6 +18,7 @@ class AppContext:
     settings: Settings
     wrapper: WrapperClient
     bot_username: str
+    funnel: Funnel
     limiter: TokenBucket = dataclasses.field(default_factory=TokenBucket)
     guard: ActionGuard = dataclasses.field(default_factory=ActionGuard)
     watchers: PaymentWatchers | None = None

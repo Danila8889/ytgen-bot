@@ -95,7 +95,8 @@ def test_examples_are_https_links():
 
 def test_funnel_texts_never_hardcode_the_manager_handle_or_the_removed_claims():
     banned = ("@togn15", "togn15", "компьютерн", "вспомогательн", "ориентировочн", "≈", "ytgenerator.ru/auth", "Менеджер добавит")
-    for path in (SRC / "funnel" / "texts.py", SRC / "funnel" / "render.py", SRC / "ai" / "prompt.py"):
+    for path in (SRC / "funnel" / "texts.py", SRC / "funnel" / "keyboards.py", SRC / "funnel" / "flow.py",
+                 SRC / "funnel" / "render.py", SRC / "ai" / "prompt.py"):
         text = path.read_text(encoding="utf-8")
         if path.name == "texts.py":  # the module docstring describes the rules by naming them
             text = text.split('"""', 2)[2]
@@ -110,7 +111,7 @@ def test_funnel_texts_contain_no_figures_next_to_units_literals():
     funnel's text modules (the module-level numbers rule is in test_no_constants.py)."""
     unit = re.compile(r"\d\s*(₽|руб|видео|клип|дн\b|дней|дня|язык|трек|канал|картин|сток|минут|мин\b|сутк)", re.IGNORECASE)
     hits = []
-    for name in ("texts.py", "render.py"):
+    for name in ("texts.py", "keyboards.py", "render.py", "flow.py", "handoff.py", "triggers.py"):
         tree = ast.parse((SRC / "funnel" / name).read_text(encoding="utf-8"))
         docstrings = {id(n.body[0].value) for n in ast.walk(tree)
                       if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))

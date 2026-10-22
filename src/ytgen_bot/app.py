@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, Router
@@ -14,13 +16,27 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent
 
 from . import texts
+from .ai.client import KieChatClient
+from .ai.layer import AiLayer, Breaker
 from .config import Settings
 from .context import AppContext
-from .handlers import link, menu, payment, referral, start, tariffs
+from .db import migrate
+from .db.engine import build_url, make_engine
+from .db.store import PgStore, StoreError, utcnow
+from .funnel.flow import Funnel
+from .funnel.reminders import ReminderLoop
+from .funnel.tariffs import (
+    TariffContractError,
+    TariffProvider,
+    check_rows,
+    parse_public_tariffs,
+)
+from .handlers import funnel, link, menu, payment, referral, start, tariffs
+from .knowledge import load as load_knowledge
 from .middlewares import ConsentMiddleware, GuardMiddleware
 from .payments import PaymentWatchers
 from .ui import say
-from .wrapper import WrapperClient, WrapperError, WrapperUnavailable
+from .wrapper import WRAPPER_FAILURES, WrapperClient, WrapperError, WrapperUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +50,8 @@ COMMANDS = [
 ]
 HEARTBEAT_EVERY_S = 60.0
 SELFCHECK_RETRY_DELAYS_S = (2.0, 5.0, 10.0, 20.0)
+PURGE_EVERY_S = 6 * 3600.0
+AI_LOG_RETENTION_DAYS = 90
 
 
 class SelfCheckError(RuntimeError):
@@ -61,6 +79,7 @@ def build_dispatcher(ctx: AppContext) -> Dispatcher:
         tariffs.build_router(),
         referral.build_router(),
         link.build_router(),
+        funnel.build_router(),
         menu.build_router(),
     )
 
@@ -135,37 +154,145 @@ async def _heartbeat(bot: Bot, path: str) -> None:
         await asyncio.sleep(HEARTBEAT_EVERY_S)
 
 
+async def funnel_self_check(settings: Settings, wrapper: WrapperClient) -> None:
+    """The funnel's deploy checks: the database is reachable AND migrated to head, and the wrapper's public tariff list has
+    the contract the funnel needs (`is_monthly` + a complete `capacity` on every row). The AI provider is NOT called: only
+    its configuration (already validated at startup) is checked."""
+    engine = make_engine(build_url(settings))
+    try:
+        store = PgStore(engine)
+        try:
+            await store.ping()
+            if not await migrate.at_head(engine):
+                raise SelfCheckError(
+                    f"database migrations are not at head (current {await migrate.current_revision(engine)}, "
+                    f"head {migrate.head_revision()})"
+                )
+        except StoreError:
+            raise SelfCheckError("the funnel database is not reachable") from None
+        except OSError:
+            raise SelfCheckError("the funnel database is not reachable") from None
+    finally:
+        await engine.dispose()
+    try:
+        raw = await wrapper.public_tariffs()
+    except (WrapperUnavailable, WrapperError) as exc:
+        raise SelfCheckError(f"could not read the wrapper's public tariffs ({type(exc).__name__})") from None
+    except WRAPPER_FAILURES:
+        raise SelfCheckError("the wrapper's public tariff list is not valid JSON") from None
+    try:
+        check_rows(raw)
+    except TariffContractError as exc:
+        raise SelfCheckError(f"wrapper tariff contract: {exc}") from None
+    try:
+        parse_public_tariffs(raw)
+    except TariffContractError as exc:
+        # Not a deploy blocker (the funnel then falls back to the manager) but never silent.
+        log.error("funnel_tariff_roles_invalid", extra={"problem": str(exc)})
+
+
 async def run_selfcheck(settings: Settings) -> None:
     bot = new_bot(settings)
     wrapper = WrapperClient(settings.wrapper_base_url, settings.service_key)
     try:
         await self_check(bot, wrapper, retry_delays=SELFCHECK_RETRY_DELAYS_S[:2])
+        await funnel_self_check(settings, wrapper)
+        log.info("funnel_self_check_ok")
     finally:
         await wrapper.aclose()
         await bot.session.close()
 
 
+def _spawn(coro: Awaitable[None], name: str) -> asyncio.Task[None]:
+    """A background task whose crash is an ERROR in the log (never a silently dead loop)."""
+
+    def done(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background_task_crashed", exc_info=task.exception(), extra={"task": name})
+
+    task = asyncio.ensure_future(coro)
+    task.set_name(name)
+    task.add_done_callback(done)
+    return task
+
+
+async def purge_loop(store: PgStore, *, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+    """Retention: delete AI-log rows older than 90 days. In-process, idempotent, an ERROR (from the store) on failure."""
+    while True:
+        try:
+            removed = await store.purge_ai_log(utcnow() - dt.timedelta(days=AI_LOG_RETENTION_DAYS))
+            log.info("ai_log_purged", extra={"removed": removed})
+        except StoreError:
+            pass  # already logged at ERROR by the store; retried on the next round
+        await sleep(PURGE_EVERY_S)
+
+
+def build_funnel(settings: Settings, wrapper: WrapperClient, store: PgStore, notify: Callable[[str], Awaitable[None]]):
+    tariffs = TariffProvider(wrapper.public_tariffs, settings.tariff_cache_ttl_s)
+    kb = load_knowledge(settings.support_contact)
+    client = KieChatClient(
+        api_key=settings.kie_api_key, base_url=settings.kie_api_url, model=settings.llm_model,
+        timeout_s=settings.llm_timeout_s,
+    )
+    ai = AiLayer(
+        store=store, client=client, tariffs=tariffs, kb=kb, user_hourly_limit=settings.ai_user_hourly_limit,
+        daily_ceiling=settings.ai_daily_ceiling, max_tokens=settings.llm_max_tokens,
+        temperature=settings.llm_temperature,
+        breaker=Breaker(settings.ai_breaker_failures, settings.ai_breaker_cooldown_min * 60.0),
+        notify_manager=notify, clock=utcnow,
+    )
+    funnel = Funnel(
+        store=store, wrapper=wrapper, tariffs=tariffs, kb=kb, ai=ai, support=settings.support_contact,
+        manager_chat_id=settings.manager_chat_id, clock=utcnow,
+    )
+    return funnel, client
+
+
 async def run_bot(settings: Settings) -> None:
     bot = new_bot(settings)
     wrapper = WrapperClient(settings.wrapper_base_url, settings.service_key)
-    heartbeat: asyncio.Task[None] | None = None
+    engine = make_engine(build_url(settings))
+    store = PgStore(engine)
+    tasks: list[asyncio.Task[None]] = []
+    ai_client: KieChatClient | None = None
     ctx: AppContext | None = None
     try:
         username = await self_check(bot, wrapper)
-        ctx = AppContext(settings=settings, wrapper=wrapper, bot_username=username)
+
+        # ISOLATION: the funnel database being down or behind must not stop checkout / payment status / link / referral /
+        # withdrawal from working, so a failed check here is an ERROR log, not a refusal to start (the deploy self-check
+        # is what blocks a bad release). Funnel flows then show "something went wrong, write to the manager".
+        try:
+            await store.ping()
+            if not await migrate.at_head(engine):
+                log.error("funnel_db_not_at_head", extra={"head": migrate.head_revision()})
+        except (StoreError, OSError):
+            log.error("funnel_db_unavailable_at_startup")
+
+        async def notify(text: str) -> None:
+            await bot.send_message(settings.manager_chat_id, text)
+
+        funnel, ai_client = build_funnel(settings, wrapper, store, notify)
+        ctx = AppContext(settings=settings, wrapper=wrapper, bot_username=username, funnel=funnel)
         ctx.watchers = PaymentWatchers(ctx, bot)
         dp = build_dispatcher(ctx)
         await bot.set_my_commands(COMMANDS)
         await bot.delete_webhook(drop_pending_updates=False)  # polling and a webhook exclude each other
-        heartbeat = asyncio.create_task(_heartbeat(bot, settings.heartbeat_file), name="heartbeat")
+        tasks.append(_spawn(_heartbeat(bot, settings.heartbeat_file), "heartbeat"))
+        tasks.append(_spawn(ReminderLoop(funnel, ctx, bot).run(), "reminders"))
+        tasks.append(_spawn(purge_loop(store), "ai_log_purge"))
         log.info("polling_started", extra={"bot_username": username})
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
-        if heartbeat is not None:
-            heartbeat.cancel()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat
+                await task
         if ctx is not None and ctx.watchers is not None:
             await ctx.watchers.shutdown()
+        if ai_client is not None:
+            await ai_client.aclose()
+        await engine.dispose()
         await wrapper.aclose()
         await bot.session.close()

@@ -40,6 +40,14 @@ class GuardMiddleware(BaseMiddleware):
 
     async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         uid, chat_type = _user_and_chat(event)
+        if (
+            isinstance(event, Message) and chat_type != "private"
+            and event.chat.id == self._ctx.settings.manager_chat_id
+        ):
+            # The manager's own (group) chat: only `/paid` is served there, authorised again inside the handler.
+            if event.text and event.text.split(maxsplit=1)[0].split("@")[0] == "/paid":
+                return await handler(event, data)
+            return None
         if uid is None or chat_type != "private":
             log.debug("update_ignored", extra={"chat_type": chat_type})
             return None

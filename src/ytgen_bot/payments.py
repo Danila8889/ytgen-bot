@@ -54,6 +54,8 @@ async def announce(ctx: AppContext, bot: Bot, uid: int, status: schemas.PaymentS
         await say(ctx, bot, uid, texts.payment_canceled(status.cancellation_reason))
     else:
         await say(ctx, bot, uid, texts.payment_success(me))
+        # Funnel hook (isolated: a funnel failure is logged at ERROR and never blocks the payment result).
+        await ctx.funnel.on_payment_success(ctx, bot, uid, me)
     return True
 
 

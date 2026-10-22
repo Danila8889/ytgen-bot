@@ -25,6 +25,12 @@ def start_bodies(h: Harness) -> list[dict]:
         (None, "none", None),
         ("", "none", None),
         ("paid", "paid", None),
+        ("yt", "source", None),
+        ("tg", "source", None),
+        ("site", "source", None),
+        ("YT", "invalid", None),
+        ("yt_", "invalid", None),
+        ("site=1", "invalid", None),
         ("ref_ABCDEF123456", "ref", "ABCDEF123456"),
         ("ref_a-b_c", "ref", "a-b_c"),
         ("ref_", "invalid", None),
@@ -37,6 +43,7 @@ def start_bodies(h: Harness) -> list[dict]:
 def test_parse_start_param(raw, kind, code):
     param = parse_start_param(raw)
     assert (param.kind, param.ref_code) == (kind, code)
+    assert param.source == (raw if kind == "source" else None)  # a ref_ payload carries no source
 
 
 # --- consent gate --------------------------------------------------------------------------------
@@ -71,13 +78,14 @@ async def test_callbacks_are_gated_too(h: Harness):
     assert texts.CONSENT_FIRST in [a.text for a in h.session.answers()]
 
 
-async def test_consent_button_sends_consent_true_then_menu(h: Harness):
+async def test_consent_button_sends_consent_true_then_the_funnel_starts(h: Harness):
     await h.say("/start")
     await h.press(callbacks.consent())
     assert start_bodies(h) == [{"consent": True, "language": "ru"}]
     assert h.fake.user(UID)["consent_at"] is not None
-    assert "Сам сервис в Telegram не используется" in h.last
-    assert "Тарифы и оплата" in [b.text for b in buttons(h.session.last_markup())]
+    assert "Сам сервис в Telegram не используется" in h.texts[-2]
+    # an unlinked person enters the sales funnel: the (separate) reminders opt-in comes first
+    assert [b.callback_data for b in buttons(h.session.last_markup())] == ["rm:yes", "rm:no"]
     # Gate is open now.
     await h.say("/tariffs")
     assert "Старт" in h.last and rub(1234) in h.last
@@ -136,7 +144,7 @@ async def test_ref_param_is_held_in_the_consent_button_and_sent_only_after_it(h:
     assert [b.callback_data for b in buttons(h.session.last_markup())] == ["cn:ABCDEF123456"]
     await h.press("cn:ABCDEF123456")
     assert start_bodies(h) == [{"consent": True, "language": "ru", "referral_code": "ABCDEF123456"}]
-    assert "Реферальная ссылка принята" in h.texts[-1]
+    assert "Реферальная ссылка принята" in h.texts[-2]
 
 
 async def test_ref_param_for_an_already_started_user_is_still_sent(consented: Harness):
@@ -145,7 +153,7 @@ async def test_ref_param_for_an_already_started_user_is_still_sent(consented: Ha
     await h.say("/start")  # organic
     await h.say("/start ref_ABCDEF123456")
     assert start_bodies(h)[-1] == {"consent": False, "language": "ru", "referral_code": "ABCDEF123456"}
-    assert "Реферальная ссылка принята" in h.last
+    assert "Реферальная ссылка принята" in h.texts[-1]  # shown together with the one-time funnel consent
 
 
 async def test_ref_param_is_one_start_call(consented: Harness):
@@ -180,7 +188,7 @@ async def test_invalid_start_param_is_ignored_and_logged(consented: Harness, cap
 )
 async def test_referral_rejections_are_told_to_the_user(consented: Harness, code: str, expect: str):
     await consented.say(f"/start ref_{code}")
-    assert expect in consented.last
+    assert expect in consented.texts[-1]
 
 
 # --- return from payment (GET /billing/payments/latest) -------------------------------------------

@@ -72,3 +72,22 @@ def test_setup_logging_installs_one_json_handler_and_quiets_httpx(capsys):
     out = capsys.readouterr().out
     assert '"msg": "hello"' in out and "secret-path" not in out
     assert len(logging.getLogger().handlers) == 1
+
+
+def test_the_new_secrets_are_redacted_from_log_lines():
+    """KIE_API_KEY, the DB password and the manager chat id never survive into a log line (they are in Settings.secrets)."""
+    import logging
+
+    from tests.conftest import make_settings
+    from ytgen_bot.logging_setup import RedactingFilter
+
+    settings = make_settings()
+    flt = RedactingFilter(settings.secrets)
+    record = logging.LogRecord(
+        "x", logging.ERROR, __file__, 1,
+        f"provider said key={settings.kie_api_key} db={settings.db_password} chat={settings.manager_chat_id}", (), None,
+    )
+    flt.filter(record)
+    for secret in (settings.kie_api_key, settings.db_password, str(settings.manager_chat_id)):
+        assert secret not in record.msg
+    assert record.msg.count("<redacted>") == 3

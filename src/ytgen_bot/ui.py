@@ -22,6 +22,8 @@ async def mark_blocked(ctx: AppContext, uid: int) -> None:
         await ctx.wrapper.set_blocked(uid, True)
     except Exception:
         log.exception("blocked_report_failed", extra={"tg_user": uid})
+    # The funnel notes it (status `blocked`, reminders cancelled); isolated: it never raises into this flow.
+    await ctx.funnel.on_blocked(uid)
 
 
 async def say(
