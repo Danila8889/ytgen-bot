@@ -1,0 +1,43 @@
+# Single service, long polling: nothing listens, so there is deliberately no `ports:` key.
+#   1. cp .env.example .env   (fill in BOT_TOKEN, BOT_SERVICE_API_KEY, SUPPORT_CONTACT)
+#   2. docker compose up -d --build
+# On the VPS `.env` is rendered by CI (scripts/render_env.sh): .env.production + GitHub secrets.
+#
+# WRAPPER_BASE_URL must be reachable FROM THIS CONTAINER. The wrapper listens on the host's
+# 127.0.0.1:8090, which is the container's own loopback here, so use the public https URL
+# (see README "Reaching the wrapper from Docker").
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: ${DOCKER_LOG_MAX_FILE:-5}
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - .env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The bot rewrites the heartbeat file every minute while Telegram answers getMe, and only after its
+      # startup self-check passed; a wedged or restart-looping bot goes unhealthy.
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import os,sys,time; p='/tmp/ytgen-bot.heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 180 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

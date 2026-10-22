@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # The suite needs no secrets and no network: the wrapper is faked with httpx.MockTransport and Telegram
+    # with a recording aiogram session (tests/conftest.py fails any real outbound connection).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install project + dev dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest -q
+
+  deploy:
+    name: Deploy to production
+    # Deploy is never automatic: workflow_dispatch only (Actions tab or `gh workflow run ci.yml --ref main`).
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    # Self-hosted runner registered for this repo on the VPS (see README "Deploy"). Until it exists this job
+    # stays queued; it does not fail and does not deploy anything.
+    runs-on: [self-hosted, ytgen-bot-vps]
+    timeout-minutes: 20
+    concurrency:
+      group: ytgen-bot-production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    # GitHub exposes a secret to scripts only through a literal `secrets.NAME` reference in this YAML, so each
+    # is mapped once here and scripts/render_env.sh reads it from the environment (deploy and rollback paths
+    # call the same script).
+    env:
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+      BOT_SERVICE_API_KEY: ${{ secrets.BOT_SERVICE_API_KEY }}
+
+    steps:
+      - name: Capture currently-deployed commit
+        id: prev
+        run: |
+          if [ -d .git ]; then
+            prev_sha=$(git rev-parse HEAD)
+            echo "Currently deployed: $prev_sha"
+          else
+            prev_sha=""
+            echo "No prior deployment in this directory - first deploy, nothing to roll back to."
+          fi
+          echo "prev_sha=$prev_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target SHA
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      # Fails the whole deploy, naming the missing secret / empty value, BEFORE anything is touched.
+      - name: Render .env from two layers
+        run: ./scripts/render_env.sh
+
+      - name: Deploy (docker compose up -d --build)
+        id: deploy
+        continue-on-error: true
+        run: docker compose up -d --build
+
+      - name: Post-deploy check (container healthy + getMe/wrapper self-check)
+        id: healthcheck
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: ./scripts/post_deploy_check.sh
+
+      - name: Roll back on deploy/health check failure
+        if: always() && !cancelled() && (steps.deploy.outcome == 'failure' || steps.healthcheck.outcome == 'failure')
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.deploy.outcome }}" = "failure" ]; then
+            reason="Deploy"
+          else
+            reason="Post-deploy check"
+          fi
+          prev_sha="${{ steps.prev.outputs.prev_sha }}"
+          if [ -z "$prev_sha" ]; then
+            echo "::error::${reason} failed for ${{ github.sha }} and there is no prior deployment to roll back to (first deploy); stopping the broken bot."
+            docker compose down || true
+            exit 1
+          fi
+          if [ "$prev_sha" = "${{ github.sha }}" ]; then
+            echo "::warning::${reason} failed for ${{ github.sha }}; this is the same commit already deployed (no older commit to roll back to) - retrying the build once."
+          else
+            echo "::warning::${reason} failed for ${{ github.sha }}; rolling back to $prev_sha"
+          fi
+          git checkout "$prev_sha"
+          # .env is gitignored: re-render it from the OLD commit's own .env.production, now in the working tree.
+          ./scripts/render_env.sh
+          docker compose up -d --build
+          if ! ./scripts/post_deploy_check.sh; then
+            echo "::error::Rollback to $prev_sha also failed its post-deploy check"
+            exit 1
+          fi
+          echo "::error::Deploy of ${{ github.sha }} failed; rolled back to $prev_sha"
+          exit 1
+
+      - name: Deploy summary
+        if: success()
+        run: |
+          echo "Deployed SHA: ${{ github.sha }}" | tee -a "$GITHUB_STEP_SUMMARY"
