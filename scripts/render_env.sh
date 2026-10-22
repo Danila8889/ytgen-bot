@@ -13,10 +13,18 @@ set -euo pipefail
 SECRET_KEYS=(
   BOT_TOKEN
   BOT_SERVICE_API_KEY
+  BOT_DB_PASSWORD
+  KIE_API_KEY
+  MANAGER_CHAT_ID
 )
 REQUIRED_PLAIN_KEYS=(
   WRAPPER_BASE_URL
   SUPPORT_CONTACT
+  POSTGRES_DB
+  POSTGRES_USER
+  KIE_API_URL
+  LLM_MODEL
+  RCLONE_REMOTE
 )
 
 [ -f .env.production ] || { echo "::error::.env.production is missing"; exit 1; }
@@ -51,6 +59,20 @@ if [ -n "${BOT_TOKEN:-}" ] && ! [[ "${BOT_TOKEN}" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]];
 fi
 if [ -n "${BOT_SERVICE_API_KEY:-}" ] && ! [[ "${BOT_SERVICE_API_KEY}" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "::error::BOT_SERVICE_API_KEY contains characters outside [A-Za-z0-9_-] (use: openssl rand -hex 32)"
+  problems=1
+fi
+# The DB password is read by the postgres image on the FIRST start only and built into a URL object by the bot.
+if [ -n "${BOT_DB_PASSWORD:-}" ] && { [ "${#BOT_DB_PASSWORD}" -lt 16 ] || ! [[ "${BOT_DB_PASSWORD}" =~ ^[A-Za-z0-9_-]+$ ]]; }; then
+  echo "::error::BOT_DB_PASSWORD must be at least 16 characters from [A-Za-z0-9_-] (use: openssl rand -hex 24)"
+  problems=1
+fi
+if [ -n "${MANAGER_CHAT_ID:-}" ] && ! [[ "${MANAGER_CHAT_ID}" =~ ^-?[0-9]{5,20}$ ]]; then
+  echo "::error::MANAGER_CHAT_ID must be a numeric Telegram chat id"
+  problems=1
+fi
+# Whitespace or a character docker compose would interpret would corrupt the rendered .env.
+if [ -n "${KIE_API_KEY:-}" ] && [[ "${KIE_API_KEY}" =~ [[:space:]\$\"\'\`\\] ]]; then
+  echo "::error::KIE_API_KEY contains whitespace or a character docker compose would interpret"
   problems=1
 fi
 

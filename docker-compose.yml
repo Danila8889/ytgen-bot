@@ -1,6 +1,9 @@
-# Single service, long polling: nothing listens, so there is deliberately no `ports:` key.
-#   1. cp .env.example .env   (fill in BOT_TOKEN, BOT_SERVICE_API_KEY, SUPPORT_CONTACT)
+# Long polling: nothing listens, so there is deliberately no `ports:` key on ANY service. The funnel's own Postgres (`db`)
+# is reachable on the compose-internal network only (the VPS host already uses 5432, 5433, 5434, 6379, 6380, 8088, 8090,
+# 3000, 8080, 8100, 5555 and 8081: nothing here may publish a host port).
+#   1. cp .env.example .env   (fill in the secrets, see README "Configuration")
 #   2. docker compose up -d --build
+# Start order: db (healthy) -> migrate (one-shot, Alembic upgrade head, must exit 0) -> bot.
 # On the VPS `.env` is rendered by CI (scripts/render_env.sh): .env.production + GitHub secrets.
 #
 # WRAPPER_BASE_URL must be reachable FROM THIS CONTAINER. The wrapper listens on the host's
@@ -14,6 +17,48 @@ x-logging: &default-logging
     max-file: ${DOCKER_LOG_MAX_FILE:-5}
 
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is not set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is not set}
+      # The password is only read by the image on the FIRST start of an empty volume (documentation.md "Database").
+      POSTGRES_PASSWORD: ${BOT_DB_PASSWORD:?BOT_DB_PASSWORD is not set}
+    volumes:
+      - ytgen_bot_pgdata:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # One-shot: applies Alembic migrations (idempotent, advisory-locked) and exits. A failure stops the deploy before
+    # the bot starts (the bot `depends_on` it completing successfully).
+    command: ["/app/.venv/bin/python", "-m", "ytgen_bot", "migrate"]
+    restart: "no"
+    logging: *default-logging
+    env_file:
+      - .env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+
   bot:
     build:
       context: .
@@ -29,6 +74,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       # The bot rewrites the heartbeat file every minute while Telegram answers getMe, and only after its
       # startup self-check passed; a wedged or restart-looping bot goes unhealthy.
@@ -41,3 +91,6 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+
+volumes:
+  ytgen_bot_pgdata:

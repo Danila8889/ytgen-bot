@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
 from collections.abc import AsyncIterator, Iterator
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 import pytest
 from aiogram import Bot, Dispatcher
 
+from tests.clock import FakeClock
 from tests.fake_wrapper import SERVICE_KEY, FakeWrapper
 from tests.mocked_telegram import (
     BOT_TOKEN,
@@ -16,9 +18,13 @@ from tests.mocked_telegram import (
     callback_update,
     message_update,
 )
+from tests.pg import ephemeral_postgres
 from ytgen_bot.app import build_dispatcher
 from ytgen_bot.config import Settings
 from ytgen_bot.context import AppContext
+from ytgen_bot.db.engine import make_engine
+from ytgen_bot.db.migrate import upgrade_to_head
+from ytgen_bot.db.store import PgStore
 from ytgen_bot.payments import PaymentWatchers
 from ytgen_bot.wrapper import WrapperClient
 
@@ -70,11 +76,55 @@ class Harness:
         return self.session.last_text()
 
 
-def make_settings() -> Settings:
-    return Settings(
-        bot_token=BOT_TOKEN, service_key=SERVICE_KEY, wrapper_base_url="https://wrapper.example.test",
-        support_contact=SUPPORT, log_level="INFO", heartbeat_file="/nonexistent/heartbeat",
-    )
+MANAGER = 777000111
+KIE_KEY = "kie-test-key-0123456789"
+
+
+def make_settings(**over: object) -> Settings:
+    base: dict[str, object] = {
+        "bot_token": BOT_TOKEN, "service_key": SERVICE_KEY, "wrapper_base_url": "https://wrapper.example.test",
+        "support_contact": SUPPORT, "log_level": "INFO", "heartbeat_file": "/nonexistent/heartbeat",
+        "db_host": "127.0.0.1", "db_port": 1, "db_name": "funnel_test", "db_user": "funnel_test",
+        "db_password": "pw-test-0123", "kie_api_key": KIE_KEY, "kie_api_url": "https://kie.example.test",
+        "llm_model": "test-model-openai", "manager_chat_id": MANAGER,
+    }
+    base.update(over)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+@pytest.fixture(scope="session")
+def pg_url() -> Iterator[object]:
+    """One throw-away Postgres for the whole run, migrated to head through the real Alembic path."""
+    with ephemeral_postgres() as url:
+        engine = make_engine(url)
+
+        async def migrate() -> None:
+            try:
+                await upgrade_to_head(engine)
+            finally:
+                await engine.dispose()
+
+        asyncio.run(migrate())
+        yield url
+
+
+_TABLES = "funnel_leads, funnel_events, funnel_objections, funnel_ai_log, funnel_messages, funnel_followups"
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+async def store(pg_url: object, clock: FakeClock) -> AsyncIterator[PgStore]:
+    import sqlalchemy as sa
+
+    engine = make_engine(pg_url)  # type: ignore[arg-type]
+    async with engine.begin() as conn:
+        await conn.execute(sa.text(f"TRUNCATE {_TABLES} RESTART IDENTITY"))
+    yield PgStore(engine, clock=clock)
+    await engine.dispose()
 
 
 @pytest.fixture

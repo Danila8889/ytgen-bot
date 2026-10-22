@@ -9,6 +9,13 @@ GOOD = {
     "BOT_SERVICE_API_KEY": "k" * 40,
     "WRAPPER_BASE_URL": "https://api.example.test/",
     "SUPPORT_CONTACT": "@support",
+    "POSTGRES_DB": "ytgen_bot",
+    "POSTGRES_USER": "ytgen_bot",
+    "BOT_DB_PASSWORD": "p" * 24,
+    "KIE_API_KEY": "kie-secret-key-value",
+    "KIE_API_URL": "https://api.kie.example",
+    "LLM_MODEL": "gemini-3-8-flash-openai",
+    "MANAGER_CHAT_ID": "-1001234567890",
 }
 
 
@@ -23,7 +30,10 @@ def test_secrets_are_not_in_repr():
     assert GOOD["BOT_SERVICE_API_KEY"] not in repr(load_settings(GOOD))
 
 
-@pytest.mark.parametrize("name", ["BOT_TOKEN", "BOT_SERVICE_API_KEY", "WRAPPER_BASE_URL", "SUPPORT_CONTACT"])
+@pytest.mark.parametrize("name", [
+    "BOT_TOKEN", "BOT_SERVICE_API_KEY", "WRAPPER_BASE_URL", "SUPPORT_CONTACT", "POSTGRES_DB", "POSTGRES_USER",
+    "BOT_DB_PASSWORD", "KIE_API_KEY", "KIE_API_URL", "LLM_MODEL", "MANAGER_CHAT_ID",
+])
 def test_a_missing_variable_is_named(name):
     env = {k: v for k, v in GOOD.items() if k != name}
     with pytest.raises(ConfigError, match=name):
@@ -71,3 +81,33 @@ def test_bad_token_shape_is_refused_without_echoing_it():
 def test_support_contact_must_be_one_line():
     with pytest.raises(ConfigError, match="SUPPORT_CONTACT"):
         load_settings({**GOOD, "SUPPORT_CONTACT": "a\nb"})
+
+
+def test_new_settings_defaults_and_overrides():
+    s = load_settings(GOOD)
+    assert (s.db_host, s.db_port, s.db_name, s.db_user) == ("db", 5432, "ytgen_bot", "ytgen_bot")
+    assert s.manager_chat_id == -1001234567890 and s.llm_model == "gemini-3-8-flash-openai"
+    assert (s.ai_user_hourly_limit, s.ai_daily_ceiling) == (10, 500)
+    tuned = load_settings({**GOOD, "AI_USER_HOURLY_LIMIT": "3", "AI_DAILY_CEILING": "50", "POSTGRES_HOST": "pg.internal",
+                           "LLM_TEMPERATURE": "0.1"})
+    assert (tuned.ai_user_hourly_limit, tuned.ai_daily_ceiling, tuned.db_host, tuned.llm_temperature) == (3, 50, "pg.internal", 0.1)
+
+
+def test_new_secrets_are_not_in_repr_and_are_redacted_by_the_log_filter():
+    s = load_settings(GOOD)
+    shown = repr(s)
+    for secret in (GOOD["BOT_DB_PASSWORD"], GOOD["KIE_API_KEY"], GOOD["MANAGER_CHAT_ID"]):
+        assert secret not in shown
+        assert secret in s.secrets
+
+
+@pytest.mark.parametrize("name,value", [
+    ("MANAGER_CHAT_ID", "@manager"), ("MANAGER_CHAT_ID", "12"), ("KIE_API_URL", "http://api.kie.example"),
+    ("KIE_API_URL", "https://u:p@api.kie.example"), ("LLM_MODEL", "bad model/with space"),
+    ("POSTGRES_DB", "db; drop"), ("POSTGRES_USER", "u u"), ("POSTGRES_HOST", "a b"), ("POSTGRES_PORT", "70000"),
+    ("AI_USER_HOURLY_LIMIT", "0"), ("AI_DAILY_CEILING", "abc"), ("LLM_TEMPERATURE", "5"), ("LLM_TIMEOUT_S", "0"),
+])
+def test_invalid_new_values_name_the_variable_not_the_value(name, value):
+    with pytest.raises(ConfigError, match=name) as exc:
+        load_settings({**GOOD, name: value})
+    assert value not in str(exc.value) or len(value) < 4

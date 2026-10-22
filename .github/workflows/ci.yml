@@ -30,8 +30,10 @@ jobs:
     env:
       UV_PYTHON: "3.12"
       UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.ci-test-src/.venv
-    # The suite needs no secrets and no network: the wrapper is faked with httpx.MockTransport and Telegram
-    # with a recording aiogram session (tests/conftest.py fails any real outbound connection).
+    # The suite needs no secrets and no outbound network: the wrapper is faked with httpx.MockTransport, Telegram with a
+    # recording aiogram session and the LLM with recorded replies (tests/conftest.py fails any real outbound
+    # connection). It DOES start a throw-away `postgres:16-alpine` container (tests/pg.py): published on 127.0.0.1 with a
+    # docker-chosen random port, never a host port the VPS already uses, removed when the run ends - light and isolated.
     steps:
       - name: Checkout (isolated from the deploy workspace)
         uses: actions/checkout@v4
@@ -75,6 +77,9 @@ jobs:
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       BOT_SERVICE_API_KEY: ${{ secrets.BOT_SERVICE_API_KEY }}
+      BOT_DB_PASSWORD: ${{ secrets.BOT_DB_PASSWORD }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
+      MANAGER_CHAT_ID: ${{ secrets.MANAGER_CHAT_ID }}
 
     steps:
       - name: Capture currently-deployed commit

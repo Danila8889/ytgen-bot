@@ -22,8 +22,17 @@ def render(tmp_path: pathlib.Path, env: dict[str, str], production: str) -> subp
     )
 
 
-GOOD_PROD = "WRAPPER_BASE_URL=https://api.example.test\nSUPPORT_CONTACT=@support\nLOG_LEVEL=INFO\n"
-GOOD_ENV = {"BOT_TOKEN": TOKEN, "BOT_SERVICE_API_KEY": KEY}
+GOOD_PROD = (
+    "WRAPPER_BASE_URL=https://api.example.test\nSUPPORT_CONTACT=@support\nLOG_LEVEL=INFO\n"
+    "POSTGRES_DB=ytgen_bot\nPOSTGRES_USER=ytgen_bot\nKIE_API_URL=https://api.kie.example\n"
+    "LLM_MODEL=gemini-3-8-flash-openai\nRCLONE_REMOTE=remote:bucket/ytgen-bot\n"
+)
+DB_PASSWORD = "d" * 32
+GOOD_ENV = {
+    "BOT_TOKEN": TOKEN, "BOT_SERVICE_API_KEY": KEY, "BOT_DB_PASSWORD": DB_PASSWORD,
+    "KIE_API_KEY": "kie-test-key-value", "MANAGER_CHAT_ID": "-1001234567890",
+}
+SECRET_NAMES = tuple(GOOD_ENV)
 
 
 def test_renders_both_layers(tmp_path):
@@ -32,16 +41,19 @@ def test_renders_both_layers(tmp_path):
     rendered = (tmp_path / ".env").read_text()
     assert "WRAPPER_BASE_URL=https://api.example.test" in rendered
     assert f"BOT_TOKEN={TOKEN}" in rendered and f"BOT_SERVICE_API_KEY={KEY}" in rendered
+    for name, value in GOOD_ENV.items():
+        assert f"{name}={value}" in rendered
     assert (tmp_path / ".env").stat().st_mode & 0o077 == 0  # not readable by others
 
 
-@pytest.mark.parametrize("missing", ["BOT_TOKEN", "BOT_SERVICE_API_KEY"])
+@pytest.mark.parametrize("missing", SECRET_NAMES)
 def test_missing_secret_fails_naming_it(tmp_path, missing):
     env = {k: v for k, v in GOOD_ENV.items() if k != missing}
     result = render(tmp_path, env, GOOD_PROD)
     assert result.returncode != 0
     assert f"::error::{missing} is empty" in result.stdout
     assert not (tmp_path / ".env").exists()
+    assert all(value not in result.stdout for value in GOOD_ENV.values())  # names, never values
 
 
 def test_empty_secret_counts_as_missing(tmp_path):
@@ -63,7 +75,8 @@ def test_the_committed_env_production_renders_a_deployable_env_with_dummy_secret
     result = render(tmp_path, GOOD_ENV, (ROOT / ".env.production").read_text())
     assert result.returncode == 0, result.stdout + result.stderr
     env = dict(line.split("=", 1) for line in (tmp_path / ".env").read_text().splitlines() if "=" in line)
-    assert set(env) >= {"BOT_TOKEN", "BOT_SERVICE_API_KEY", "WRAPPER_BASE_URL", "SUPPORT_CONTACT"}
+    assert set(env) >= {*SECRET_NAMES, "WRAPPER_BASE_URL", "SUPPORT_CONTACT", "POSTGRES_DB", "POSTGRES_USER",
+                        "KIE_API_URL", "LLM_MODEL", "RCLONE_REMOTE"}
     assert env["SUPPORT_CONTACT"] == "@togn15" and env["WRAPPER_BASE_URL"].startswith("https://")
     sys.path.insert(0, str(ROOT / "src"))
     from ytgen_bot.config import load_settings
@@ -75,7 +88,7 @@ def test_the_committed_env_production_renders_a_deployable_env_with_dummy_secret
 def test_the_committed_env_production_has_no_secret_names():
     keys = {line.split("=", 1)[0] for line in (ROOT / ".env.production").read_text().splitlines()
             if line and not line.startswith("#")}
-    assert not keys & {"BOT_TOKEN", "BOT_SERVICE_API_KEY"}
+    assert not keys & set(SECRET_NAMES)
 
 
 def test_short_key_and_odd_token_are_refused_without_echoing_values(tmp_path):
@@ -90,13 +103,24 @@ def test_compose_special_characters_in_plain_values_are_refused(tmp_path):
     assert result.returncode != 0 and "SUPPORT_CONTACT" in result.stdout
 
 
-def test_compose_file_publishes_no_ports_and_has_one_service():
+def test_compose_publishes_no_ports_anywhere_and_orders_db_migrate_bot():
     import yaml
 
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-    assert list(compose["services"]) == ["bot"]
-    assert "ports" not in compose["services"]["bot"]
-    assert compose["services"]["bot"]["restart"] == "unless-stopped"
+    assert list(compose["services"]) == ["db", "migrate", "bot"]
+    for name, service in compose["services"].items():
+        assert "ports" not in service, f"{name} must not publish a host port (the VPS host ports are all taken)"
+        assert "network_mode" not in service  # compose-internal network only
+    db, migrate, bot = (compose["services"][n] for n in ("db", "migrate", "bot"))
+    assert db["image"].startswith("postgres:16") and "healthcheck" in db
+    assert db["volumes"] == ["ytgen_bot_pgdata:/var/lib/postgresql/data"] and "ytgen_bot_pgdata" in compose["volumes"]
+    assert migrate["depends_on"]["db"]["condition"] == "service_healthy" and migrate["restart"] == "no"
+    assert "migrate" in migrate["command"]
+    assert bot["depends_on"]["db"]["condition"] == "service_healthy"
+    assert bot["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
+    assert bot["restart"] == "unless-stopped"
+    # the db password comes from the BOT_DB_PASSWORD secret, and a missing one stops compose by name
+    assert "BOT_DB_PASSWORD" in db["environment"]["POSTGRES_PASSWORD"] and ":?" in db["environment"]["POSTGRES_PASSWORD"]
 
 
 def test_workflow_deploys_only_on_dispatch_and_uses_the_rollback_pattern():
@@ -121,5 +145,37 @@ def test_workflow_deploys_only_on_dispatch_and_uses_the_rollback_pattern():
     assert test["env"]["UV_PYTHON"] == "3.12"
     assert any(step.get("run") == "uv run ruff check" for step in test["steps"])
     assert "always() && !cancelled() && (steps.deploy.outcome == 'failure' || steps.healthcheck.outcome == 'failure')" in text
-    assert set(deploy["env"]) == {"BOT_TOKEN", "BOT_SERVICE_API_KEY"}
+    assert set(deploy["env"]) == set(SECRET_NAMES)
     assert wf[True]["push"]["branches"] == ["main"]  # `on:` parses as the boolean key True
+
+
+@pytest.mark.parametrize("bad", ["short", "has space-and-more-characters!", "x" * 15])
+def test_weak_or_odd_db_password_is_refused_without_echoing_it(tmp_path, bad):
+    result = render(tmp_path, {**GOOD_ENV, "BOT_DB_PASSWORD": bad}, GOOD_PROD)
+    assert result.returncode != 0 and "BOT_DB_PASSWORD" in result.stdout
+    assert bad not in result.stdout
+
+
+@pytest.mark.parametrize("bad", ["@manager", "12", "12 34", "-"])
+def test_non_numeric_manager_chat_id_is_refused(tmp_path, bad):
+    result = render(tmp_path, {**GOOD_ENV, "MANAGER_CHAT_ID": bad}, GOOD_PROD)
+    assert result.returncode != 0 and "MANAGER_CHAT_ID" in result.stdout
+
+
+def test_kie_key_with_compose_special_characters_is_refused(tmp_path):
+    result = render(tmp_path, {**GOOD_ENV, "KIE_API_KEY": "abc$def"}, GOOD_PROD)
+    assert result.returncode != 0 and "KIE_API_KEY" in result.stdout and "abc$def" not in result.stdout
+
+
+@pytest.mark.parametrize("missing", ["POSTGRES_DB", "POSTGRES_USER", "KIE_API_URL", "LLM_MODEL", "RCLONE_REMOTE"])
+def test_missing_plain_db_ai_or_backup_value_fails_naming_it(tmp_path, missing):
+    prod = "\n".join(line for line in GOOD_PROD.splitlines() if not line.startswith(missing + "="))
+    result = render(tmp_path, GOOD_ENV, prod)
+    assert result.returncode != 0 and f"{missing} is missing or empty" in result.stdout
+
+
+def test_nothing_is_written_when_any_new_secret_is_missing(tmp_path):
+    env = {k: v for k, v in GOOD_ENV.items() if k != "KIE_API_KEY"}
+    result = render(tmp_path, env, GOOD_PROD)
+    assert result.returncode != 0 and not (tmp_path / ".env").exists()
+    assert "gh secret set KIE_API_KEY" in result.stdout
