@@ -302,7 +302,7 @@ Then extend ytgen-infra's `scripts/backup_watchdog.sh` `TARGETS` with `"ytgen-bo
 (`ytgen-infra` is not edited from this repo). A restore drill: `docker run --rm -i postgres:16-alpine pg_restore --list < <dump>` lists the archive; a real restore is `docker compose exec -T db pg_restore -U <user> -d <db> --clean --if-exists < <dump>`.
 `.env` is rewritten by every deploy, so `RCLONE_REMOTE` lives in `.env.production` (committed): change it there.
 
-Runner (same convention as the sibling repos, registered 2026-10-22): service `actions.runner.Danila8889-ytgen-bot.ytgen-bot-vps-runner`, directory `/opt/actions-runner-ytgen-bot`, label `ytgen-bot-vps`. The runner also runs the `test` job, which now starts a throw-away
+Runner (same convention as the sibling repos, registered 2026-10-22): service `actions.runner.Danila8889-ytgen-bot.ytgen-bot-vps-runner`, directory `/opt/actions-runner-ytgen-bot`, label `ytgen-bot-vps`. CI is exclusively self-hosted (push to `main` and `workflow_dispatch` only, no `pull_request`; no GitHub-hosted runner), so the same runner also runs the `test` job in an isolated `.ci-test-src/` checkout (it never touches the deployed checkout's HEAD or `.env`). The `test` job starts a throw-away
 `postgres:16-alpine` container on `127.0.0.1` with a random high port (removed at the end of the run); the first run pulls the image.
 
 ## 12. Operations

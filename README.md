@@ -117,8 +117,7 @@ Locally against a wrapper on your machine use `WRAPPER_BASE_URL=http://127.0.0.1
 
 ## Deploy
 
-`.github/workflows/ci.yml`: the `test` job runs on every push/PR to `main`. Both jobs run on the self-hosted runner labelled `ytgen-bot-vps` (GitHub-hosted jobs on this private repo do not start
-while the account has a billing problem); a runner executes one job at a time and `deploy` `needs: test`, so the two cannot deadlock each other, and the test checkout goes into `.ci-test-src/` so it can never
+`.github/workflows/ci.yml`: the `test` job runs on every push to `main` (and on manual dispatch; there is no `pull_request` trigger). CI is exclusively self-hosted: both jobs run on the runner labelled `ytgen-bot-vps`, no GitHub-hosted runner is used; a runner executes one job at a time and `deploy` `needs: test`, so the two cannot deadlock each other, and the test checkout goes into `.ci-test-src/` so it can never
 move HEAD or clean the `.env` of the production checkout. The `deploy` job runs **only on `workflow_dispatch`** (`gh workflow run ci.yml --ref main`), after `test`:
 
 1. `scripts/render_env.sh` renders `.env` from `.env.production` + the GitHub secrets and **fails the deploy naming the missing secret/empty value** before anything is touched.

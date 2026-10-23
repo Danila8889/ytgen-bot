@@ -3,15 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
   test:
     name: Test
-    # DEVIATION from the sibling repos (they use `ubuntu-latest`): GitHub-hosted jobs on this PRIVATE repo do not
-    # start while the account has a billing problem, so the suite runs on the same self-hosted runner as deploy.
+    # CI runs exclusively on the self-hosted runner (no GitHub-hosted runner is used anywhere in this repo), the
+    # same model as the sibling repos. There is no `pull_request` trigger: work lands on `main` directly, so a
+    # push (or a manual dispatch) is the only way a job reaches the runner.
     #
     # Two jobs, one runner, no deadlock: (1) a runner executes one job at a time and `deploy` `needs: test`, so
     # within a run the two never compete, and nothing waits for something that waits for it; (2) only `deploy`
