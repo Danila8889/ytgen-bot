@@ -52,7 +52,7 @@ and when the ceiling is reached). Details: `documentation.md` section 3.9.
 
 ```bash
 uv run python -m ytgen_bot                    # run the bot (long polling)
-uv run python -m ytgen_bot selfcheck          # deploy check: getMe, the wrapper, the DB at head, the wrapper's tariff contract (no live LLM call)
+uv run python -m ytgen_bot selfcheck          # deploy check: getMe, the wrapper, the DB at head, the wrapper's tariff contract (no live LLM call; transient network loss to Telegram / the wrapper is retried, see "Deploy")
 uv run python -m ytgen_bot migrate            # apply Alembic migrations (idempotent); the compose `migrate` service runs this before the bot
 uv run python -m ytgen_bot funnel-report      # the PDF section 12 metrics: SPIN completion, drop-off, link_sent rate, objections, hand-off reasons, source -> paid
 uv run python -m ytgen_bot ai-sample --n 20   # a random sample of the AI log for the weekly review
@@ -123,7 +123,9 @@ move HEAD or clean the `.env` of the production checkout. The `deploy` job runs 
 1. `scripts/render_env.sh` renders `.env` from `.env.production` + the GitHub secrets and **fails the deploy naming the missing secret/empty value** before anything is touched.
 2. `docker compose up -d --build`: `db` starts and must become healthy, the one-shot `migrate` service applies the Alembic migrations (**additive only**, idempotent; a failure stops the deploy), then the bot starts.
 3. `scripts/post_deploy_check.sh`: `db` healthy, `migrate` exited 0, the bot `running` + `healthy`, and `python -m ytgen_bot selfcheck` inside it must pass (`getMe`, the wrapper, the database reachable and at head,
-   the wrapper's public tariffs valid for the funnel; **no live kie.ai call**).
+   the wrapper's public tariffs valid for the funnel; **no live kie.ai call**). The VPS's network path to `api.telegram.org` is intermittently lossy (measured 2026-10-23), so the `selfcheck` command retries
+   **network-level errors only** (timeouts / connection errors to Telegram or the wrapper): up to 6 attempts of 10 s each with 3/6/10/15/20 s backoff, a WARNING `self_check_retry` (attempt number + error class) per retry in the deploy log,
+   a hard 300 s cap, and a final failure that says how many attempts were made. A rejected `BOT_TOKEN` (401), a rejected `BOT_SERVICE_API_KEY`, a tariff-contract violation, an unmigrated/unreachable database fail on the first attempt, and nothing can skip the check.
 4. On failure of 2 or 3 the job rolls back to the previously deployed commit and re-runs the same check (`always() && !cancelled() && (...failure)`), and fails the run either way. Migrations are additive, so the previous image runs on the migrated schema.
 
 One-time prerequisites (owner): the GitHub secrets `BOT_TOKEN`, `BOT_SERVICE_API_KEY`, **`BOT_DB_PASSWORD`, `KIE_API_KEY`, `MANAGER_CHAT_ID`** on this repo, the same `BOT_SERVICE_API_KEY` on the wrapper repo, the wrapper's

@@ -27,6 +27,8 @@ class MockedSession(BaseSession):
         super().__init__()
         self.requests: list[TelegramMethod[Any]] = []
         self.errors: deque[Exception] = deque()  # raised by the next SendMessage
+        self.get_me_errors: deque[Exception] = deque()  # raised by the next GetMe calls, one per call
+        self.timeouts: list[int | None] = []  # the per-request timeout each call was made with
 
     async def close(self) -> None:  # pragma: no cover
         return None
@@ -36,6 +38,7 @@ class MockedSession(BaseSession):
 
     async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None) -> Any:
         self.requests.append(method)
+        self.timeouts.append(timeout)
         if isinstance(method, SendMessage):
             if self.errors:
                 raise self.errors.popleft()
@@ -44,6 +47,8 @@ class MockedSession(BaseSession):
                 chat=Chat(id=int(method.chat_id), type="private"), text=method.text,
             )
         if isinstance(method, GetMe):
+            if self.get_me_errors:
+                raise self.get_me_errors.popleft()
             return User(id=BOT_ID, is_bot=True, first_name="YT", username=BOT_USERNAME)
         if isinstance(method, (AnswerCallbackQuery, SetMyCommands, DeleteWebhook)):
             return True

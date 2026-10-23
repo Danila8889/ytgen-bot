@@ -12,6 +12,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent
 
@@ -49,13 +50,52 @@ COMMANDS = [
     BotCommand(command="help", description="Помощь"),
 ]
 HEARTBEAT_EVERY_S = 60.0
-SELFCHECK_RETRY_DELAYS_S = (2.0, 5.0, 10.0, 20.0)
+SELFCHECK_RETRY_DELAYS_S = (2.0, 5.0, 10.0, 20.0)  # runtime startup: the wrapper may be restarting
+# The deploy `selfcheck` command only. The VPS -> api.telegram.org path loses packets intermittently (measured
+# 2026-10-23: connects taking 1-6 s with SYN retransmits, ~1 in 6 not completing within 8 s), so a network-level
+# error is retried on a SHORT per-attempt timeout (a fresh connection beats waiting on a stalled one): 6 attempts,
+# worst case per call 6 x 10 s + 54 s of backoff = 114 s. Only network errors are retried; see `_retrying`.
+SELFCHECK_NETWORK_RETRY_DELAYS_S = (3.0, 6.0, 10.0, 15.0, 20.0)
+SELFCHECK_REQUEST_TIMEOUT_S = 10
+SELFCHECK_DEADLINE_S = 300.0  # hard cap on the whole command (getMe + wrapper + DB + tariffs); fails loudly past it
 PURGE_EVERY_S = 6 * 3600.0
 AI_LOG_RETENTION_DAYS = 90
 
 
 class SelfCheckError(RuntimeError):
     """A startup/deploy check failed. The message never contains a secret."""
+
+
+def _error_label(exc: BaseException) -> str:
+    """Error class names only (never the message, which may echo a URL): `TelegramNetworkError <- TimeoutError`."""
+    label = type(exc).__name__
+    if exc.__cause__ is not None:
+        label += f" <- {type(exc.__cause__).__name__}"
+    return label
+
+
+async def _retrying[T](what: str, call: Callable[[], Awaitable[T]], delays: tuple[float, ...]) -> T:
+    """Run `call`, retrying ONLY network-level failures (Telegram `TelegramNetworkError`, wrapper `WrapperUnavailable`:
+    timeouts, connection errors) with the given backoff. Every retry is a WARNING with the attempt number and the error
+    class; running out of attempts is a `SelfCheckError` that says how many were made. Anything else (a 401, a contract or
+    database error, a non-network Telegram error) propagates untouched on the first attempt."""
+    attempts = len(delays) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return await call()
+        except (TelegramNetworkError, WrapperUnavailable) as exc:
+            if attempt == attempts:
+                noun = "attempt" if attempts == 1 else "attempts"
+                raise SelfCheckError(
+                    f"{what} unreachable after {attempts} {noun} (last error: {_error_label(exc)})"
+                ) from None
+            log.warning(
+                "self_check_retry",
+                extra={"target": what, "attempt": attempt, "attempts": attempts, "error": _error_label(exc),
+                       "retry_in_s": delays[attempt - 1]},
+            )
+            await asyncio.sleep(delays[attempt - 1])
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def new_bot(settings: Settings) -> Bot:
@@ -107,35 +147,42 @@ async def on_error(event: ErrorEvent, ctx: AppContext, bot: Bot) -> bool:
     return True
 
 
-async def self_check(bot: Bot, wrapper: WrapperClient, *, retry_delays: tuple[float, ...] = SELFCHECK_RETRY_DELAYS_S) -> str:
+async def self_check(
+    bot: Bot,
+    wrapper: WrapperClient,
+    *,
+    retry_delays: tuple[float, ...] = SELFCHECK_RETRY_DELAYS_S,
+    telegram_retry_delays: tuple[float, ...] = (),
+    request_timeout_s: int | None = None,
+) -> str:
     """getMe, then one authenticated read-only call to the wrapper. Returns the bot's username.
 
     The wrapper call is `GET /v1/bot/me` for the bot's own id (never a real user; unlinked -> `linked:
     false`): 200 proves URL + key, 401 means the key differs from the wrapper's, 503 means the wrapper has the
-    bot API switched off. Network failures are retried (the wrapper may be restarting); the rest is final.
+    bot API switched off. Network failures are retried (the wrapper may be restarting; for the deploy command also
+    Telegram, see `SELFCHECK_NETWORK_RETRY_DELAYS_S`); the rest is final on the first attempt. The runtime startup
+    passes neither `telegram_retry_delays` nor `request_timeout_s`, so its behaviour is unchanged.
     """
-    me = await bot.get_me()
+    try:
+        me = await _retrying(
+            "Telegram getMe", lambda: bot.get_me(request_timeout=request_timeout_s), telegram_retry_delays
+        )
+    except TelegramUnauthorizedError:
+        raise SelfCheckError("Telegram rejected BOT_TOKEN (401 Unauthorized)") from None
     if not me.username:
         raise SelfCheckError("getMe returned no bot username (the return URL needs it)")
-    delays = list(retry_delays)
-    while True:
-        try:
-            await wrapper.me(me.id)
-            break
-        except WrapperUnavailable:
-            if not delays:
-                raise SelfCheckError("wrapper unreachable at WRAPPER_BASE_URL") from None
-            await asyncio.sleep(delays.pop(0))
-        except WrapperError as exc:
-            if exc.code == "invalid_bot_service_key":
-                raise SelfCheckError(
-                    "wrapper rejected BOT_SERVICE_API_KEY (it must equal the wrapper's BOT_SERVICE_API_KEY)"
-                ) from None
-            if exc.code == "bot_api_disabled":
-                raise SelfCheckError(
-                    "wrapper bot API is disabled (BOT_SERVICE_API_KEY unset or too short on the wrapper)"
-                ) from None
-            raise SelfCheckError(f"wrapper answered {exc.status} {exc.code} to the self-check") from None
+    try:
+        await _retrying("wrapper (WRAPPER_BASE_URL)", lambda: wrapper.me(me.id), retry_delays)
+    except WrapperError as exc:
+        if exc.code == "invalid_bot_service_key":
+            raise SelfCheckError(
+                "wrapper rejected BOT_SERVICE_API_KEY (it must equal the wrapper's BOT_SERVICE_API_KEY)"
+            ) from None
+        if exc.code == "bot_api_disabled":
+            raise SelfCheckError(
+                "wrapper bot API is disabled (BOT_SERVICE_API_KEY unset or too short on the wrapper)"
+            ) from None
+        raise SelfCheckError(f"wrapper answered {exc.status} {exc.code} to the self-check") from None
     log.info("self_check_ok", extra={"bot_username": me.username})
     return me.username
 
@@ -154,10 +201,13 @@ async def _heartbeat(bot: Bot, path: str) -> None:
         await asyncio.sleep(HEARTBEAT_EVERY_S)
 
 
-async def funnel_self_check(settings: Settings, wrapper: WrapperClient) -> None:
+async def funnel_self_check(
+    settings: Settings, wrapper: WrapperClient, *, retry_delays: tuple[float, ...] = ()
+) -> None:
     """The funnel's deploy checks: the database is reachable AND migrated to head, and the wrapper's public tariff list has
     the contract the funnel needs (`is_monthly` + a complete `capacity` on every row). The AI provider is NOT called: only
-    its configuration (already validated at startup) is checked."""
+    its configuration (already validated at startup) is checked. A network-level failure reading the wrapper's tariffs
+    is retried with `retry_delays`; the database and the contract checks are never retried."""
     engine = make_engine(build_url(settings))
     try:
         store = PgStore(engine)
@@ -175,7 +225,7 @@ async def funnel_self_check(settings: Settings, wrapper: WrapperClient) -> None:
     finally:
         await engine.dispose()
     try:
-        raw = await wrapper.public_tariffs()
+        raw = await _retrying("wrapper public tariffs", wrapper.public_tariffs, retry_delays)
     except (WrapperUnavailable, WrapperError) as exc:
         raise SelfCheckError(f"could not read the wrapper's public tariffs ({type(exc).__name__})") from None
     except WRAPPER_FAILURES:
@@ -193,10 +243,20 @@ async def funnel_self_check(settings: Settings, wrapper: WrapperClient) -> None:
 
 async def run_selfcheck(settings: Settings) -> None:
     bot = new_bot(settings)
-    wrapper = WrapperClient(settings.wrapper_base_url, settings.service_key)
+    wrapper = WrapperClient(settings.wrapper_base_url, settings.service_key, timeout_s=SELFCHECK_REQUEST_TIMEOUT_S)
     try:
-        await self_check(bot, wrapper, retry_delays=SELFCHECK_RETRY_DELAYS_S[:2])
-        await funnel_self_check(settings, wrapper)
+        deadline = asyncio.timeout(SELFCHECK_DEADLINE_S)
+        try:
+            async with deadline:
+                await self_check(
+                    bot, wrapper, retry_delays=SELFCHECK_NETWORK_RETRY_DELAYS_S,
+                    telegram_retry_delays=SELFCHECK_NETWORK_RETRY_DELAYS_S, request_timeout_s=SELFCHECK_REQUEST_TIMEOUT_S,
+                )
+                await funnel_self_check(settings, wrapper, retry_delays=SELFCHECK_NETWORK_RETRY_DELAYS_S)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            raise SelfCheckError(f"the self-check did not finish within {SELFCHECK_DEADLINE_S:.0f} s overall") from None
         log.info("funnel_self_check_ok")
     finally:
         await wrapper.aclose()

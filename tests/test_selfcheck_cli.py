@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 
+import httpx
 import pytest
 import sqlalchemy as sa
 from aiogram import Bot
@@ -92,6 +93,58 @@ async def test_funnel_self_check_reads_the_public_list_not_the_per_user_one(pg_u
     await wrapper.aclose()
 
 
+@pytest.fixture
+def sleeps(monkeypatch) -> list[float]:
+    recorded: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        recorded.append(s)
+
+    monkeypatch.setattr(app.asyncio, "sleep", fake_sleep)
+    return recorded
+
+
+async def test_funnel_self_check_retries_a_flaky_public_tariff_read_then_passes(pg_url, sleeps, caplog):
+    fake = FakeWrapper()
+    fake.tariffs = funnel_tariffs()
+    fake.queue("GET", "/v1/public/tariffs", httpx.ConnectTimeout("slow"))
+    fake.queue("GET", "/v1/public/tariffs", httpx.ConnectError("reset"))
+    wrapper = wrapper_with(fake)
+    await app.funnel_self_check(settings_for(pg_url), wrapper, retry_delays=(1.0, 2.0, 3.0))
+    await wrapper.aclose()
+    assert len(fake.calls("GET", "/v1/public/tariffs")) == 3 and sleeps == [1.0, 2.0]
+    retries = [r for r in caplog.records if r.levelno == logging.WARNING and r.getMessage() == "self_check_retry"]
+    assert [r.attempt for r in retries] == [1, 2]
+
+
+async def test_funnel_self_check_gives_up_on_a_persistently_unreachable_wrapper_and_says_how_often(pg_url, sleeps):
+    fake = FakeWrapper()
+    for _ in range(4):
+        fake.queue("GET", "/v1/public/tariffs", httpx.ConnectTimeout("slow"))
+    wrapper = wrapper_with(fake)
+    with pytest.raises(app.SelfCheckError, match="wrapper public tariffs unreachable after 3 attempts"):
+        await app.funnel_self_check(settings_for(pg_url), wrapper, retry_delays=(1.0, 2.0))
+    await wrapper.aclose()
+    assert len(fake.calls("GET", "/v1/public/tariffs")) == 3
+
+
+async def test_funnel_self_check_never_retries_a_database_or_contract_error(pg_url, sleeps):
+    fake = FakeWrapper()
+    fake.tariffs = funnel_tariffs()
+    wrapper = wrapper_with(fake)
+    with pytest.raises(app.SelfCheckError, match="funnel database is not reachable"):
+        await app.funnel_self_check(make_settings(db_port=1), wrapper, retry_delays=(1.0, 2.0))
+    assert not fake.requests and sleeps == []
+    del fake.tariffs[1]["capacity"]
+    with pytest.raises(app.SelfCheckError, match="wrapper tariff contract"):
+        await app.funnel_self_check(settings_for(pg_url), wrapper, retry_delays=(1.0, 2.0))
+    fake.queue_error("GET", "/v1/public/tariffs", 500, "boom")
+    with pytest.raises(app.SelfCheckError, match="could not read the wrapper's public tariffs"):
+        await app.funnel_self_check(settings_for(pg_url), wrapper, retry_delays=(1.0, 2.0))
+    await wrapper.aclose()
+    assert len(fake.calls("GET", "/v1/public/tariffs")) == 2 and sleeps == []
+
+
 async def test_wrong_role_shape_is_a_loud_error_log_but_not_a_deploy_blocker(pg_url, caplog):
     fake = FakeWrapper()
     fake.tariffs = [t for t in funnel_tariffs() if t["id"] != 24]  # only two monthly tariffs
@@ -121,7 +174,7 @@ async def test_run_selfcheck_runs_both_halves(pg_url, monkeypatch):
     fake = FakeWrapper()
     fake.tariffs = funnel_tariffs()
     monkeypatch.setattr(app, "new_bot", lambda s: Bot(BOT_TOKEN, session=MockedSession()))
-    monkeypatch.setattr(app, "WrapperClient", lambda url, key: wrapper_with(fake))
+    monkeypatch.setattr(app, "WrapperClient", lambda url, key, **kw: wrapper_with(fake))
     await app.run_selfcheck(settings_for(pg_url))
     assert fake.calls("GET", "/me") and fake.calls("GET", "/v1/public/tariffs")
 

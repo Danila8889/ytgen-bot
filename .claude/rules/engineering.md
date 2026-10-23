@@ -18,7 +18,9 @@ The "how". See root `CLAUDE.md` for the "what and why". This file assumes you ag
 - The deploy job renders `.env` (`scripts/render_env.sh`), runs `docker compose up -d --build` (compose starts `db`, waits
   for it to be healthy, runs the one-shot `migrate` service, then the bot), then `scripts/post_deploy_check.sh` (db healthy,
   migrate exited 0, bot healthy, `python -m ytgen_bot selfcheck`: DB reachable and at head, wrapper tariff contract valid, no
-  live LLM call); on failure it rolls back to the previous commit with the repo-wide pattern `always() && !cancelled() && (steps.deploy.outcome == 'failure' ||
+  live LLM call; network-level errors to Telegram / the wrapper are retried inside `selfcheck`: 6 attempts x 10 s, backoff
+  3/6/10/15/20 s, 300 s hard cap, because the VPS -> api.telegram.org path is intermittently lossy; anything else fails on
+  the first attempt and there is no skip path); on failure it rolls back to the previous commit with the repo-wide pattern `always() && !cancelled() && (steps.deploy.outcome == 'failure' ||
   steps.healthcheck.outcome == 'failure')`. Do not weaken that condition.
 
 ## Documentation stays current

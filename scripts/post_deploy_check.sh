@@ -6,7 +6,9 @@
 #   4. `python -m ytgen_bot selfcheck` inside it passes: getMe against Telegram, one authenticated read-only call to the
 #      wrapper (proves the token, the URL and that BOT_SERVICE_API_KEY matches), the DB reachable and migrated to head,
 #      and the wrapper's public tariff list valid for the funnel (is_monthly + capacity on every row). NO live kie.ai call:
-#      the AI provider is checked by configuration only.
+#      the AI provider is checked by configuration only. Network-level errors (timeouts, connection errors) towards
+#      Telegram or the wrapper are retried INSIDE the command (6 attempts, 10 s each, WARNING per retry, hard cap 300 s);
+#      a bad token / key, a contract or a database error fails on the first attempt. There is no way to skip this step.
 # Prints no secrets: the bot's logs go through its redaction filter and the check prints reasons only.
 set -euo pipefail
 
