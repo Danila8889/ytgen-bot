@@ -179,3 +179,20 @@ def test_nothing_is_written_when_any_new_secret_is_missing(tmp_path):
     result = render(tmp_path, env, GOOD_PROD)
     assert result.returncode != 0 and not (tmp_path / ".env").exists()
     assert "gh secret set KIE_API_KEY" in result.stdout
+
+
+def test_deploy_and_rollback_archive_container_logs_before_recreating_them():
+    """Docker deletes a container's log when compose removes it: the deploy ships
+    the running containers' logs between build and `up`, the rollback before its
+    checkout (core's ship_container_logs.sh, ytgen-infra hosts.md "Log archive")."""
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    steps = wf["jobs"]["deploy"]["steps"]
+    deploy = next(s for s in steps if s.get("id") == "deploy")
+    run = deploy["run"]
+    assert deploy["env"]["LOG_SHIPPER"].endswith("/YouTubeGen/scripts/ship_container_logs.sh")
+    assert run.index("docker compose build") < run.index('"$LOG_SHIPPER" --name ytgen-bot') < run.index("docker compose up -d")
+    assert "--build" not in run.split("docker compose up -d", 1)[1].splitlines()[0]
+    rollback = next(s for s in steps if str(s.get("name", "")).startswith("Roll back"))["run"]
+    assert rollback.index("ship_container_logs.sh --name ytgen-bot") < rollback.index("git checkout")

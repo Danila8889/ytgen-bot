@@ -105,7 +105,18 @@ jobs:
       - name: Deploy (docker compose up -d --build)
         id: deploy
         continue-on-error: true
-        run: docker compose up -d --build
+        # Build, ship the running containers' logs to the S3 log archive, then
+        # recreate: Docker deletes a container's log when the container is removed.
+        # The shipper is core's scripts/ship_container_logs.sh in the core runner
+        # checkout on this host (ytgen-infra hosts.md, "Log archive (S3)"); a failed
+        # ship never fails the deploy, the 30-min cron retries the same window.
+        env:
+          LOG_SHIPPER: /opt/actions-runner-ytgen/_work/YouTubeGen/YouTubeGen/scripts/ship_container_logs.sh
+        run: |
+          docker compose build
+          "$LOG_SHIPPER" --name ytgen-bot --project-dir "$PWD" \
+            || echo "::warning::log ship before recreation failed (status $?); the 30-min cron retries the window"
+          docker compose up -d
 
       - name: Post-deploy check (container healthy + getMe/wrapper self-check)
         id: healthcheck
@@ -133,6 +144,9 @@ jobs:
           else
             echo "::warning::${reason} failed for ${{ github.sha }}; rolling back to $prev_sha"
           fi
+          # The rollback recreates the failed release's containers: archive their logs first.
+          /opt/actions-runner-ytgen/_work/YouTubeGen/YouTubeGen/scripts/ship_container_logs.sh --name ytgen-bot --project-dir "$PWD" \
+            || echo "::warning::log ship before the rollback failed (status $?)"
           git checkout "$prev_sha"
           # .env is gitignored: re-render it from the OLD commit's own .env.production, now in the working tree.
           ./scripts/render_env.sh
